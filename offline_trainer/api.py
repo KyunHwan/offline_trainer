@@ -272,7 +272,7 @@ def train(config_path: str) -> None:
                 sampler.set_epoch(epoch)
 
             for _, data in enumerate(tqdm(dataloader, disable=(rank != 0))):
-                trainer.train_step(data=move_to_device(data, device))
+                loss_dict = trainer.train_step(data=move_to_device(data, device))
 
             _dist_barrier(enable_dist_train)
 
