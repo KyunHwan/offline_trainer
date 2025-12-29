@@ -1,0 +1,23 @@
+schema_version: 1
+
+params:
+  num_q_vectors: 10
+  vec_dim: 384
+
+
+model:
+  graph:
+    inputs: [continuous_vec]
+    modules:
+      vqvae_codebook:
+        _type_: cfg_vqvae_codebook
+        num_q_vectors: ${params.num_q_vectors}
+        vec_dim: ${params.vec_dim}
+    
+    nodes:
+      - name: codebook_vec
+        call: module:vqvae_codebook
+        kwargs:
+          continuous_vec: $continuous_vec
+    outputs: [$codebook_vec]
+    return: single

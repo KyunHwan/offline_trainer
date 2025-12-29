@@ -35,6 +35,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import DataLoader, RandomSampler
 
 from tqdm import tqdm
+import wandb
 
 def _params_dict(params) -> dict:
     if hasattr(params, "model_dump"):
@@ -221,6 +222,18 @@ def _save_checkpoints(models: nn.ModuleDict[str, nn.Module],
     print(f"Saved checkpoints for epoch {epoch} at {epoch_folder}")
 
 
+""" Training Info Logging """
+
+def _record(loss_dict: dict[str, torch.Tensor], iterations: int): 
+    detached_loss = {}
+    for key in loss_dict.keys():
+        detached_loss[key] = loss_dict[key].detach().cpu().item()
+    
+    wandb.log(detached_loss, step=iterations)
+
+    return detached_loss
+
+
 
 
 
@@ -267,12 +280,16 @@ def train(config_path: str) -> None:
 
 
     try:
+        iterations = 0
         for epoch in range(config.train.epochs):
             if enable_dist_train:
                 sampler.set_epoch(epoch)
 
             for _, data in enumerate(tqdm(dataloader, disable=(rank != 0))):
                 loss_dict = trainer.train_step(data=move_to_device(data, device))
+                if rank == 0:
+                    _record(loss_dict, iterations)
+                    iterations += 1
 
             _dist_barrier(enable_dist_train)
 
