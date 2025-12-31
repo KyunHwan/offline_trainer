@@ -56,7 +56,9 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
                                                      )
 
         """ VQVAE Codebook """
-        related_codebook_quantized_vec = self.models['vqvae_codebook'](continuous_vec=posterior_cls_token)
+        codebook_output = self.models['vqvae_codebook'](continuous_vec=posterior_cls_token)
+        related_codebook_quantized_vec = codebook_output['q']
+        loss['codebook_min_dist'] = codebook_output['codebook_min_dist']
 
         """ NSVQ """
         # https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=9696322
@@ -111,7 +113,7 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
         self._backward(loss)
         self._step()
         
-        return loss
+        return self._detached_loss(loss)
     
     def _ready_train(self):
         for key in self.models.keys():
@@ -123,17 +125,21 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
         for key in self.optimizers.keys():
             self.optimizers[key].zero_grad(set_to_none=True)
 
-    def _backward(self, loss: dict[str, torch.Tensor]):
+    def _backward(self, loss: dict[str, Any]):
         # can do backbward independently on each loss since they're from disjoint graphs
         for key in loss.keys():
-            loss[key].backward()
+            if isinstance(loss[key], torch.Tensor):
+                loss[key].backward()
 
     def _step(self):
         for key in self.optimizers.keys():
             self.optimizers[key].step()
 
-    def _detached_loss(self, loss: dict[str, torch.Tensor]):
+    def _detached_loss(self, loss: dict[str, Any]):
         detached_loss = {}
         for key in loss.keys():
-            detached_loss[key] = loss[key].detach().cpu().item()
+            if isinstance(loss[key], torch.Tensor):
+                detached_loss[key] = loss[key].detach().cpu().item()
+            else:
+                detached_loss[key] = loss[key]
         return detached_loss

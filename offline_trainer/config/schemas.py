@@ -110,9 +110,9 @@ class TrainConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     trainer: ComponentSpec
-    optimizer: OptimizerSpec
+    optimizer: OptimizerSpec | None=None
     scheduler: ComponentSpec = Field(default_factory=lambda: ComponentSpec(type="none"))
-    loss: ComponentSpec
+    loss: ComponentSpec | None=None
     metrics: list[ComponentSpec] = Field(default_factory=list)
     callbacks: list[ComponentSpec] = Field(default_factory=list)
     loggers: list[ComponentSpec] = Field(default_factory=lambda: [ComponentSpec(type="noop")])

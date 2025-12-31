@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import os
+import gc
 from pathlib import Path
 
 from offline_trainer.config.loader import load_config
 from offline_trainer.config.schemas import ExperimentConfig, validate_config
+from offline_trainer.config.schemas import OptimizerParams
 from offline_trainer.modeling.factories import PolicyConstructorModelFactory
 from offline_trainer.registry import (
     TRAINER_REGISTRY,
@@ -36,8 +38,10 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import DataLoader, RandomSampler
 
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
 from tqdm import tqdm
-import wandb
+#import wandb
 import pickle
 
 def _params_dict(params) -> dict:
@@ -68,9 +72,10 @@ def init_weights(m):
 
 """ Distributed Training Helpers """
 
-def _dist_setup(enable_dist_train) -> None:
+def _dist_setup(enable_dist_train, device) -> None:
     if enable_dist_train:
-        dist.init_process_group(backend="nccl")
+        dist.init_process_group(backend="nccl",
+                                device_id=device)
 
 def _dist_barrier(dist_enabled) -> None:
     if dist_enabled:
@@ -152,12 +157,13 @@ def _build_optimizers(config, models: nn.ModuleDict[str, nn.Module], device) -> 
         train.optimizer.params
         train.load_dir
     """
-    optimizer_cls = OPTIMIZER_BUILDER_REGISTRY.get(config.train.optimizer.type)
-    optimizer_factory = instantiate(optimizer_cls, _params_dict(config.train.optimizer.params))
     
     # One optimizer per model
     optimizers = {}
     for k, model in models.items():
+        optimizer_cls = OPTIMIZER_BUILDER_REGISTRY.get(config.model.component_optims[k]['type'])
+        optimizer_factory = instantiate(optimizer_cls, 
+                                        _params_dict(OptimizerParams.model_validate(config.model.component_optims[k]['params']).model_dump()))
         optimizers[k] = optimizer_factory.build(model.parameters())
         if config.train.load_dir is not None:
             optimizers[k].load_state_dict(torch.load(os.path.join(config.train.load_dir, f"{k}_optimizer.pt"), map_location=device))
@@ -176,29 +182,31 @@ def _build_dataloader(world_rank, local_rank, world_size, config, enable_dist_tr
         train.save_dir
     """
     
-    datamodule_cls = DATASET_BUILDER_REGISTRY.get(config.data.datamodule.type)
-    dataset_factory = instantiate(datamodule_cls, params=config.data.datamodule.params, config=config)
-    returned_product = dataset_factory.build(local_rank=local_rank, dist_enabled=enable_dist_train, save_dir=config.train.save_dir, params=config.data.datamodule.params)
+    # datamodule_cls = DATASET_BUILDER_REGISTRY.get(config.data.datamodule.type)
+    # dataset_factory = instantiate(datamodule_cls, params=config.data.datamodule.params, config=config)
+    # returned_product = dataset_factory.build(local_rank=local_rank, dist_enabled=enable_dist_train, save_dir=config.train.save_dir, params=config.data.datamodule.params)
 
-    if isinstance(returned_product, dict):
-        for key in returned_product.keys():
-            if key == "dataset":
-                dataset = returned_product[key]
-            elif key == 'norm_stats':
-                stats = returned_product[key]
-                if local_rank == 0:
-                    try:
-                        stats_path = os.path.join(config.train.save_dir, f"dataset_stats.pkl")
-                        with open(stats_path, "wb") as f:
-                            pickle.dump(stats, f)
-                    except:
-                        stats_path = Path(os.path.join(config.train.save_dir, f"dataset_stats.pkl")).expanduser()
-                        with open(stats_path, "wb") as f:
-                            pickle.dump(stats, f)
+    # if isinstance(returned_product, dict):
+    #     for key in returned_product.keys():
+    #         if key == "dataset":
+    #             dataset = returned_product[key]
+    #         elif key == 'norm_stats':
+    #             stats = returned_product[key]
+    #             if local_rank == 0:
+    #                 try:
+    #                     stats_path = os.path.join(config.train.save_dir, f"dataset_stats.pkl")
+    #                     with open(stats_path, "wb") as f:
+    #                         pickle.dump(stats, f)
+    #                 except:
+    #                     stats_path = Path(os.path.join(config.train.save_dir, f"dataset_stats.pkl")).expanduser()
+    #                     with open(stats_path, "wb") as f:
+    #                         pickle.dump(stats, f)
 
-    else: 
-        dataset = returned_product
-    
+    # else: 
+    #     dataset = returned_product
+    repo_id = 'joon001001/igris-b-pnp-lerobot'
+    dataset = LeRobotDataset(repo_id)
+
     # When using DistributedSampler, do NOT set shuffle=True on DataLoader.
     # Shuffling is handled by the sampler (see PyTorch DDP tutorial pattern)
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=world_rank, drop_last=True) if enable_dist_train else RandomSampler(dataset)
@@ -239,7 +247,7 @@ def _build_trainer(local_rank, enable_dist_train, config, device) -> Trainer:
 
 """ Parameter Saving """
 
-def _save_checkpoints(models: nn.ModuleDict[str, nn.Module], 
+def _save_checkpoints(models: nn.ModuleDict, 
                       optimizers: dict[str, torch.optim.Optimizer], 
                       save_dir: str, 
                       epoch: int):
@@ -283,14 +291,15 @@ def _save_checkpoints(models: nn.ModuleDict[str, nn.Module],
 
 """ Training Info Logging """
 
-def _record(loss_dict: dict[str, torch.Tensor], iterations: int): 
+def _record(loss_dict: dict[str, Any], iterations: int): 
     detached_loss = {}
     for key in loss_dict.keys():
-        detached_loss[key] = loss_dict[key].detach().cpu().item()
+        if isinstance(loss_dict[key], torch.Tensor):
+            detached_loss[key] = loss_dict[key].detach().cpu().item()
+        else: 
+            detached_loss[key] = loss_dict[key]
     
-    wandb.log(detached_loss, step=iterations)
-
-    return detached_loss
+    #wandb.log(detached_loss, step=iterations)
 
 
 
@@ -319,22 +328,22 @@ def train(config_path: str) -> None:
 
     # Initialize the process group for distributed training
     # This initialization is needed to enable cross-GPU communication
-    _dist_setup(enable_dist_train)
+    _dist_setup(enable_dist_train, device)
 
     rank = dist.get_rank() if enable_dist_train else 0
     world_size = dist.get_world_size() if enable_dist_train else 1
 
-    if rank == 0:
-        # Pass the config dictionary so you can filter by hyperparameters in the UI
-        # You might need to add 'project_name' to your yaml schema, or hardcode it here
-        project_name = config.data.datamodule.params["task_name"]
+    # if rank == 0:
+    #     # Pass the config dictionary so you can filter by hyperparameters in the UI
+    #     # You might need to add 'project_name' to your yaml schema, or hardcode it here
+    #     project_name = config.data.datamodule.params["task_name"]
         
-        wandb.init(
-            project=project_name,
-            config=_params_dict(config), # Uses your helper to dump Pydantic config
-            name=f"{getattr(config.train, 'project_name', 'imitation_learning')}", # Optional: Readable run name
-            # reinit=True # Uncomment if you run multiple trainings in one script execution
-        )
+    #     wandb.init(
+    #         project=project_name,
+    #         config=_params_dict(config), # Uses your helper to dump Pydantic config
+    #         name=f"{getattr(config.train, 'project_name', 'imitation_learning')}", # Optional: Readable run name
+    #         # reinit=True # Uncomment if you run multiple trainings in one script execution
+    #     )
 
     # Same seed on all ranks for synchronizing model initialization weights
     base_seed = getattr(config.train, "seed", 0)
@@ -343,22 +352,32 @@ def train(config_path: str) -> None:
     if rank == 0: print(f"Global batch size = {config.data.batch_size * world_size}")
 
     trainer = _build_trainer(local_rank, enable_dist_train, config, device)
+    _dist_barrier(enable_dist_train)
 
     # After models build with synchronized model initialization, offset seed for runtime randomness (Dropout, etc.)
     # This ensures distinct stochastic behavior per GPU
     set_global_seed(seed=base_seed + rank)
 
-    dataloader, sampler = _build_dataloader(world_rank=rank, local_rank=local_rank, world_size=world_size, config=config, enable_dist_train=enable_dist_train)
+    #dataloader, sampler = _build_dataloader(world_rank=rank, local_rank=local_rank, world_size=world_size, config=config, enable_dist_train=enable_dist_train)
 
     try:
+        if rank == 0:
+            import psutil
+            process = psutil.Process(os.getpid())
+            cpu_ram_epoch_diff = process.memory_info().rss / (1024 ** 3)
+
         iterations = 0
         for epoch in range(config.train.epoch):
             if enable_dist_train:
                 sampler.set_epoch(epoch)
 
             for _, data in enumerate(tqdm(dataloader, disable=(rank != 0))):
+                print(data.keys())
                 loss_dict = trainer.train_step(data=move_to_device(data, device))
                 if rank == 0:
+                    loss_dict['CPU RAM Diff From Start (GB)'] = process.memory_info().rss / (1024 ** 3) - cpu_ram_epoch_diff
+                    loss_dict['Allocated GPU Memory (GB)'] = torch.cuda.memory_allocated() / 1024**3
+                    loss_dict['Reserved GPU Memory (GB)'] = torch.cuda.memory_allocated() / 1024**3
                     _record(loss_dict, iterations)
                     iterations += 1
 
@@ -371,16 +390,18 @@ def train(config_path: str) -> None:
                                   optimizers=trainer.optimizers, 
                                   save_dir=config.train.save_dir, 
                                   epoch=epoch)
-                
-            _dist_barrier(enable_dist_train)
 
+            gc.collect() 
+            torch.cuda.empty_cache()
+            _dist_barrier(enable_dist_train)
+            
         if rank == 0: 
             print("Training finished !!")
 
     finally:
         if rank == 0:
             print("program terminating...")
-            wandb.finish()
+            #wandb.finish()
         _dist_cleanup(enable_dist_train)
 
     
@@ -394,10 +415,10 @@ def train(config_path: str) -> None:
 
 
 if __name__ == "__main__":
-    # try:
-    #     torch.multiprocessing.set_start_method('spawn')
-    # except RuntimeError:
-    #     pass
+    try:
+        torch.multiprocessing.set_start_method('spawn')
+    except RuntimeError:
+        pass
     parser = argparse.ArgumentParser(description="Parse for train config .yaml file")
     parser.add_argument("--train_config", help="absolute path to the train config .yaml file.", required=True)
     args = parser.parse_args()
