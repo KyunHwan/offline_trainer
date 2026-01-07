@@ -12,7 +12,7 @@ from typing import Any
 import copy
 
 
-@TRAINER_REGISTRY.register("cfg_vqvae_flow_matching_trainer")
+@TRAINER_REGISTRY.register("cfg_vqvae_flow_matching_trainer_kot")
 class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
     def __init__(self,
                  *,
@@ -109,9 +109,19 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
                                                   action = data['action']
                                                  )  # e.g., returns posterior_cls_token_ema
             loss["True_prior_posterior"] = torch.sum(torch.pow(prior_cls_token.detach().clone() - posterior_cls_token.detach().clone(), 2), dim=-1, keepdim=False).mean().item()
-
-        loss["velocity"] = torch.sum(torch.sum(torch.pow(dx_t - dx_t_hat, 2), dim=-1, keepdim=False), dim=-1, keepdim=False).mean()
+        velocity_loss = torch.sum(torch.sum(torch.pow(dx_t - dx_t_hat, 2), dim=-1, keepdim=False), dim=-1, keepdim=False).mean()
+        sinkhorn_loss = self.loss(pred_action = noise + self.models['action_decoder'](
+                                                            time = torch.zeros_like(time), 
+                                                            noise = noise, 
+                                                            memory_input = conditioning_info,
+                                                            discrete_semantic_input=simulated_quantized_vec,), 
+                                     target_action = data['action'], 
+                                     state_pred = data['observation.state'], 
+                                     state_target = data['observation.state'])
+        loss["Total"] = velocity_loss + 0.2 * sinkhorn_loss
+        loss["velocity"] = velocity_loss.detach().clone().item()
         loss["EMA_prior_posterior"] = torch.sum(torch.pow(prior_cls_token - posterior_target, 2), dim=-1, keepdim=False).mean()
+        loss["Sinkhorn"] = sinkhorn_loss.detach().clone().item()
             
         return loss
 
