@@ -39,10 +39,11 @@ class LerobotDatasetFactory:
         # You may need to adjust keys like 'observation.state' depending on your specific dataset columns
         delta_timestamps = {
             "action": action_timestamps,
+            "observation.current": obs_proprio_timestamps,
+            "observation.state": obs_proprio_timestamps,
             "observation.images.cam_right": obs_images_timestamps,
             "observation.images.cam_head": obs_images_timestamps,
             "observation.images.cam_left": obs_images_timestamps,
-            "observation.state": obs_proprio_timestamps,
         }
 
         dataset = None

@@ -47,6 +47,14 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
             right_image_features, _ = self.models['backbone'](data['observation.images.cam_right'])
             right_image_features = einops.rearrange(right_image_features, 'b c h w -> b 1 c h w')
 
+            """ Depth """
+            depth_head = self.models['da3'](image=data['observation.images.cam_head'], export_feat_layers=[1, 5, 10, 23])
+            print(depth_head.keys())
+            print(type(depth_head['aux']))
+            print(depth_head['aux']['feat_layer_1'].shape)
+            print(depth_head['aux']['feat_layer_10'].shape)
+            print(depth_head['aux']['feat_layer_23'].shape)
+
         """ VQVAE Posterior """
         posterior_cls_token = self.models['vqvae_posterior'](cond_proprio=data['observation.state'],
                                                              cond_visual=head_image_features,
@@ -74,18 +82,25 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
         distance_magnitude = torch.norm(posterior_cls_token - related_codebook_quantized_vec, p=2, dim=-1, keepdim=True)
 
         # Classifier-Free Guidance
-        bernoulli = torch.bernoulli(torch.tensor([1 - ((0.5 * min(epoch, 5)) / 5) for i in range(posterior_cls_token.shape[0])]))
+        bernoulli = torch.bernoulli(torch.tensor([1 - ((0.5 * min(epoch, 2)) / 2) for i in range(posterior_cls_token.shape[0])]))
         bernoulli = bernoulli.view(*([bernoulli.shape[0]] + [1]*(posterior_cls_token.ndim - 1))).to(posterior_cls_token.device, dtype=posterior_cls_token.dtype)
 
         simulated_quantized_vec = (posterior_cls_token + normalized_noise_vec * distance_magnitude) * bernoulli
          
-        """ Info Encoder """
-        conditioning_info = self.models['info_encoder'](cond_proprio=data['observation.state'],
-                                                        cond_visual=torch.cat([head_image_features, 
-                                                                               left_image_features, 
-                                                                               right_image_features],
-                                                                               axis=1),
-                                                        cond_semantic=simulated_quantized_vec)
+        # """ Info Encoder """
+        # conditioning_info = self.models['info_encoder'](cond_proprio=data['observation.state'],
+        #                                                 cond_visual=torch.cat([head_image_features, 
+        #                                                                        left_image_features, 
+        #                                                                        right_image_features],
+        #                                                                        axis=1),
+        #                                                 cond_semantic=simulated_quantized_vec)
+        """ Proprio Projection """
+        # Assumes that proprio feature dimension will be matched to that of visual
+        conditioning_info = self.models['proprio_projector'](cond_proprio=data['observation.state'],
+                                                                cond_visual=torch.cat([head_image_features, 
+                                                                                        left_image_features, 
+                                                                                        right_image_features],
+                                                                                        axis=1),)
 
         """ Flow Matching """
         noise = torch.randn_like(data['action'], device=data['action'].device)
@@ -124,10 +139,10 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
                                      state_target = data['observation.state'])
         
         # Enforces the latent vectors to commit to respective vectors in the codebook
-        commitment_loss = (posterior_cls_token - related_codebook_quantized_vec.detach()).pow(2).view(-1, posterior_cls_token.shape[-1]).sum(dim=1).mean()
+        commitment_loss = (posterior_cls_token - related_codebook_quantized_vec.detach()).pow(2).view(-1, posterior_cls_token.shape[-1]).sum(dim=-1).mean()
         
         loss["Total"] = velocity_loss + 0.2 * sinkhorn_loss + 0.25 * commitment_loss
-        loss["EMA_prior_posterior"] = torch.sum(torch.pow(prior_cls_token - posterior_target, 2), dim=-1, keepdim=False).mean()
+        loss["EMA_prior_posterior"] = torch.sum(torch.pow(prior_cls_token - posterior_target, 2).view(-1, prior_cls_token.shape[-1]), dim=-1, keepdim=False).mean()
         loss["velocity"] = velocity_loss.detach().clone().item()
         loss["Sinkhorn"] = sinkhorn_loss.detach().clone().item()
         loss["posterior_codebook"] = commitment_loss.detach().clone().item()
@@ -154,7 +169,7 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
         except:
             pass
         detached_loss = self._detached_loss(loss)
-        if epoch < 10 and iterations % ((epoch + 1) * 10) == 0:
+        if epoch < 2 and iterations % ((epoch + 1) * 10) == 0:
             with torch.no_grad():
                 output = self.models['vqvae_codebook'](continuous_vec=continuous_vec, train=True, replacement=True)
                 self._reset_opt_state_rows(output['dead_indices'])
@@ -177,12 +192,9 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
                 v_ema.copy_(v)
 
     def _ready_train(self):
-        for key in self.models.keys():
-            if key != 'backbone': 
-                self.models[key].train()
-                self.optimizers[key].train()
-            else: 
-                self.models[key].eval()
+        for key in self.optimizers.keys():
+            self.models[key].train()
+            self.optimizers[key].train()
             
     def _zero_grad(self):
         for key in self.optimizers.keys():
@@ -196,10 +208,7 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
 
     def _step(self):
         for key in self.optimizers.keys():
-            if key != 'backbone':
-                self.optimizers[key].step()
-            else: 
-                continue
+            self.optimizers[key].step()
             
     def _detached_loss(self, loss: dict[str, Any]):
         detached_loss = {}

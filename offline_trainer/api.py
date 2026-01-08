@@ -153,11 +153,14 @@ def _build_models(world_size, global_rank, local_rank, enable_dist_train, config
     model_factory = PolicyConstructorModelFactory()
     model = model_factory.build(model_config_paths)
     models = {"main": model} if not isinstance(model, dict) else model
-    
+    model_total_params = 0.0
     for k, policy in models.items():
         model_loaded = False
         frozen = False
-        if local_rank == 0: print(f"Total parameters of {k} model: {sum(p.numel() for p in policy.parameters())}")
+        if local_rank == 0: 
+            n_params_m = sum(p.numel() for p in policy.parameters()) / 1000000.0
+            model_total_params += n_params_m
+            print(f"Parameters of {k} model: {n_params_m:.1f} M")
 
         # Load model checkpoints / initialization
         # Need to check that saved models weren't wrapped using DDP (ie. that they aren't wrapped using modules)
@@ -189,6 +192,9 @@ def _build_models(world_size, global_rank, local_rank, enable_dist_train, config
 
         models[k] = DDP(policy, find_unused_parameters=find_unused_parameters) if enable_dist_train and not frozen else policy
 
+    if local_rank == 0: 
+        print(f"Total Parameters: {model_total_params:.1f} M")
+
     return nn.ModuleDict(models)
 
 def _build_optimizers(config, models: nn.ModuleDict[str, nn.Module], device) -> dict[str, torch.optim.Optimizer]:
@@ -200,18 +206,19 @@ def _build_optimizers(config, models: nn.ModuleDict[str, nn.Module], device) -> 
     """
     
     # One optimizer per model
+    # Only build optimizer for a model that is registered to have a optimizer
     optimizers = {}
-    for k, model in models.items():
+    for model_name in config.model.component_optims.keys():
         # Skip models that are frozen
-        params = [p for p in model.parameters() if p.requires_grad]
+        params = [p for p in models[model_name].parameters() if p.requires_grad]
         if len(params) == 0:
             continue 
-        optimizer_cls = OPTIMIZER_BUILDER_REGISTRY.get(config.model.component_optims[k]['type'])
+        optimizer_cls = OPTIMIZER_BUILDER_REGISTRY.get(config.model.component_optims[model_name]['type'])
         optimizer_factory = instantiate(optimizer_cls, 
-                                        _params_dict(OptimizerParams.model_validate(config.model.component_optims[k]['params']).model_dump()))
-        optimizers[k] = optimizer_factory.build(model.parameters())
+                                        _params_dict(OptimizerParams.model_validate(config.model.component_optims[model_name]['params']).model_dump()))
+        optimizers[model_name] = optimizer_factory.build(models[model_name].parameters())
         if config.train.load_dir is not None:
-            optimizers[k].load_state_dict(torch.load(os.path.join(config.train.load_dir, f"{k}_optimizer.pt"), map_location=device))
+            optimizers[model_name].load_state_dict(torch.load(os.path.join(config.train.load_dir, f"{model_name}_optimizer.pt"), map_location=device))
     
     return optimizers
 
@@ -427,6 +434,8 @@ def train(config_path: str) -> None:
             for _, data in enumerate(tqdm(dataloader, disable=(rank != 0))):
                 data['action'] = (data['action'] - stats_cpu['action']['mean']) / (stats_cpu['action']['std'] + 1e-8)
                 data['observation.state'] = (data['observation.state'] - stats_cpu['observation.state']['mean']) / (stats_cpu['observation.state']['std'] + 1e-8)
+                data['observation.current'] = (data['observation.current'] - stats_cpu['observation.current']['mean']) / (stats_cpu['observation.current']['std'] + 1e-8)
+                data['observation.state'] = torch.concat([data['observation.state'], data['observation.current']], dim=-1)
                 data = cast_dtype(data, torch.float32)
                 loss_dict = trainer.train_step(data=move_to_device(data, device), epoch=epoch, total_epochs=config.train.epoch, iterations=iterations)
                 if rank == 0:

@@ -1,7 +1,7 @@
 schema_version: 1
 
 params:
-  cond_proprio_dim: 24
+  cond_proprio_dim: 48
   cond_visual_dim: 1024
   use_cond_semantic: true
   use_cond_semantic_projection: true
@@ -10,13 +10,13 @@ params:
   use_cls_token: true
   num_cls_token: 4
 
-  transformer_d_model: 384
-  transformer_nhead: 8
-  transformer_dim_feedforward: 2048
+  transformer_d_model: 1024
+  transformer_nhead: 16
+  transformer_dim_feedforward: 4096
   transformer_dropout: 0.2
   transformer_activation: gelu
   transformer_batch_first: true
-  transformer_num_layers: 6
+  transformer_num_layers: 8
 
 
 model:
