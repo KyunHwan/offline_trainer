@@ -74,7 +74,7 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
         distance_magnitude = torch.norm(posterior_cls_token - related_codebook_quantized_vec, p=2, dim=-1, keepdim=True)
 
         # Classifier-Free Guidance
-        bernoulli = torch.bernoulli(torch.tensor([1 - ((0.5 * epoch) / total_epochs) for i in range(posterior_cls_token.shape[0])]))
+        bernoulli = torch.bernoulli(torch.tensor([1 - ((0.5 * min(epoch, 5)) / 5) for i in range(posterior_cls_token.shape[0])]))
         bernoulli = bernoulli.view(*([bernoulli.shape[0]] + [1]*(posterior_cls_token.ndim - 1))).to(posterior_cls_token.device, dtype=posterior_cls_token.dtype)
 
         simulated_quantized_vec = (posterior_cls_token + normalized_noise_vec * distance_magnitude) * bernoulli
@@ -113,7 +113,7 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
         
         err = (dx_t - dx_t_hat).pow(2)
         velocity_loss = err.view(err.shape[0], -1).sum(dim=1).mean()
-        #velocity_loss = torch.sum(torch.sum(torch.pow(dx_t - dx_t_hat, 2), dim=-1, keepdim=False), dim=-1, keepdim=False).mean()
+    
         sinkhorn_loss = self.loss(pred_action = noise + self.models['action_decoder'](
                                                             time = torch.zeros_like(time), 
                                                             noise = noise, 
@@ -122,10 +122,15 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
                                      target_action = data['action'], 
                                      state_pred = data['observation.state'], 
                                      state_target = data['observation.state'])
-        loss["Total"] = velocity_loss + 0.2 * sinkhorn_loss
+        
+        # Enforces the latent vectors to commit to respective vectors in the codebook
+        commitment_loss = (posterior_cls_token - related_codebook_quantized_vec.detach()).pow(2).view(-1, posterior_cls_token.shape[-1]).sum(dim=1).mean()
+        
+        loss["Total"] = velocity_loss + 0.2 * sinkhorn_loss + 0.25 * commitment_loss
         loss["EMA_prior_posterior"] = torch.sum(torch.pow(prior_cls_token - posterior_target, 2), dim=-1, keepdim=False).mean()
         loss["velocity"] = velocity_loss.detach().clone().item()
         loss["Sinkhorn"] = sinkhorn_loss.detach().clone().item()
+        loss["posterior_codebook"] = commitment_loss.detach().clone().item()
             
         return loss, posterior_cls_token.detach().clone()
 
