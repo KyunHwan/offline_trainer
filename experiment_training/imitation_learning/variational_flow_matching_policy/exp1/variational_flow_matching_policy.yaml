@@ -2,18 +2,19 @@ plugins:
   - "experiment_training.components.dataloader.lerobot_data"
   - "experiment_training.components.loss.sinkhorn_knopp"
   - "experiment_training.components.optimizer.schedule_free_radam"
-  - "experiment_training.components.trainer.imitation_learning.cfg_vqvae_flow_matching.cfg_vqvae_flow_matching_trainer_kot"
+  - "experiment_training.components.trainer.imitation_learning.variational_flow_matching_policy.variational_flow_matching_policy_trainer"
 model:
   find_unused_parameters: true
   component_config_paths:
-    backbone: "experiment_models/cfg_vqvae_flow_matching/exp1/backbone.yaml"
-    vqvae_posterior: "experiment_models/cfg_vqvae_flow_matching/exp1/vqvae_posterior.yaml"
-    vqvae_prior: "experiment_models/cfg_vqvae_flow_matching/exp1/vqvae_prior.yaml"
-    vqvae_codebook: "experiment_models/cfg_vqvae_flow_matching/exp1/vqvae_codebook.yaml"
-    #info_encoder: "experiment_models/cfg_vqvae_flow_matching/exp1/info_encoder.yaml"
-    proprio_projector: "experiment_models/cfg_vqvae_flow_matching/exp1/proprio_projector.yaml"
-    action_decoder: "experiment_models/cfg_vqvae_flow_matching/exp1/action_decoder.yaml"
-    da3: "experiment_models/cfg_vqvae_flow_matching/exp1/da3.yaml"
+    backbone: "experiment_models/variational_flow_matching_policy/exp1/backbone.yaml"
+    da3: "experiment_models/variational_flow_matching_policy/exp1/da3.yaml"
+    vqvae_codebook: "experiment_models/variational_flow_matching_policy/exp1/vqvae_codebook.yaml"
+    vqvae_posterior: "experiment_models/variational_flow_matching_policy/exp1/vqvae_posterior.yaml"
+    vqvae_prior: "experiment_models/variational_flow_matching_policy/exp1/vqvae_prior.yaml"
+    gate: "experiment_models/variational_flow_matching_policy/exp1/gate.yaml"
+    proprio_projector: "experiment_models/variational_flow_matching_policy/exp1/proprio_projector.yaml"
+    moe_action_decoder: "experiment_models/variational_flow_matching_policy/exp1/moe_action_decoder.yaml"
+    
   component_build_args:
     backbone:
       init: false
@@ -30,13 +31,22 @@ model:
     vqvae_prior:
       init: true
       freeze: false
+    gate:
+      init: true
+      freeze: false
     proprio_projector:
       init: true
       freeze: false
-    action_decoder:
+    moe_action_decoder:
       init: true
       freeze: false
   component_optims:
+    vqvae_codebook:
+      type: "schedule_free_radam"
+      params:
+        lr: 1e-4
+        betas: [0.9, 0.999]
+        silent_sgd_phase: true
     vqvae_posterior:
       type: "schedule_free_radam"
       params:
@@ -49,7 +59,7 @@ model:
         lr: 1e-4
         betas: [0.9, 0.999]
         silent_sgd_phase: true
-    vqvae_codebook:
+    gate:
       type: "schedule_free_radam"
       params:
         lr: 1e-4
@@ -61,7 +71,7 @@ model:
         lr: 1e-4
         betas: [0.9, 0.999]
         silent_sgd_phase: true
-    action_decoder:
+    moe_action_decoder:
       type: "schedule_free_radam"
       params:
         lr: 1e-4
@@ -75,7 +85,7 @@ data:
     params:
       task_name: 'picknplace'
       local_files_only: false
-      root: '~/igris-b-pnp/lerobot_dataset_3/'
+      root: '~/igris-b-pnp/lerobot_dataset_2/'
       repo_id: 'joon001001/igris-b-pnp-lerobot_v3'
       action_horizon: 40
       obs_proprio_history: 40
@@ -87,13 +97,13 @@ data:
   persistent_workers: true
   prefetch_factor: 1
 train:
-  project_name: 'cfg_vqvae_flow_matching exp3'
+  project_name: 'variational_flow_matching_policy exp3'
   epoch: 1000
   load_dir: null
   save_every: 10
-  save_dir: "~/offline_trainer/experiment_training/imitation_learning/cfg_vqvae_flow_matching/exp1"
+  save_dir: "~/offline_trainer/experiment_training/imitation_learning/variational_flow_matching_policy/exp1"
   trainer: 
-    type: 'cfg_vqvae_flow_matching_trainer_kot'
+    type: 'variational_flow_matching_policy_trainer'
   loss:
     type: "sinkhorn_knopp"
     params:

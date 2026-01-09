@@ -1,0 +1,22 @@
+schema_version: 1
+
+params:
+  input_dim: 1024
+  num_experts: 5
+
+
+model:
+  graph:
+    inputs: [input]
+    modules:
+      vfp_gate:
+        _type_: vfp_gate
+        input_dim: ${params.input_dim}
+        num_experts: ${params.num_experts}
+    nodes:
+      - name: gating
+        call: module:vfp_gate
+        kwargs:
+          input: $input
+    outputs: [$gating]
+    return: single

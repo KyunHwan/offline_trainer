@@ -12,8 +12,8 @@ from typing import Any
 import copy
 
 
-@TRAINER_REGISTRY.register("cfg_vqvae_flow_matching_trainer_kot")
-class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
+@TRAINER_REGISTRY.register("variational_flow_matching_policy_trainer")
+class Variational_Flow_Matching_Policy_Trainer(nn.Module):
     def __init__(self,
                  *,
                  models: nn.ModuleDict, 
@@ -76,20 +76,8 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
         noise_vec = torch.randn_like(posterior_cls_token, device=posterior_cls_token.device)
         normalized_noise_vec = F.normalize(noise_vec, p=2, dim=-1)
         distance_magnitude = torch.norm(posterior_cls_token - related_codebook_quantized_vec, p=2, dim=-1, keepdim=True)
-
-        # Classifier-Free Guidance
-        bernoulli = torch.bernoulli(torch.tensor([1 - ((0.5 * min(epoch, 2)) / 2) for i in range(posterior_cls_token.shape[0])]))
-        bernoulli = bernoulli.view(*([bernoulli.shape[0]] + [1]*(posterior_cls_token.ndim - 1))).to(posterior_cls_token.device, dtype=posterior_cls_token.dtype)
-
-        simulated_quantized_vec = (posterior_cls_token + normalized_noise_vec * distance_magnitude) * bernoulli
+        simulated_quantized_vec = posterior_cls_token + normalized_noise_vec * distance_magnitude
          
-        # """ Info Encoder """
-        # conditioning_info = self.models['info_encoder'](cond_proprio=data['observation.state'],
-        #                                                 cond_visual=torch.cat([head_image_features, 
-        #                                                                        left_image_features, 
-        #                                                                        right_image_features],
-        #                                                                        axis=1),
-        #                                                 cond_semantic=simulated_quantized_vec)
         """ Proprio Projection """
         # Assumes that proprio feature dimension will be matched to that of visual
         conditioning_info = self.models['proprio_projector'](cond_proprio=data['observation.state'],
@@ -98,20 +86,67 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
                                                                                     right_image_features],
                                                                                     dim=1),)
 
+        """ Gating """
+        gating = self.models['gate'](simulated_quantized_vec)
+        B, E = gating.shape
+        # expert_ids = gating.argmax(dim=1)          # (B,) each element in [0, E-1]
+
         """ Flow Matching """
         noise = torch.randn_like(data['action'], device=data['action'].device)
         time = self.dist.sample((data['action'].shape[0],)).to(data['action'].device)
+        # if time.ndim > 1:
+        #     time_flat = time.squeeze(-1)
+        # else:
+        #    time_flat = time
         sample = self.probPath.sample(t=time, x_0=noise, x_1=data['action'])
 
         x_t = sample.x_t
         dx_t = sample.dx_t
+        # dx_t_hat_full = torch.empty_like(dx_t)     # (B, T, A)
 
-        dx_t_hat = self.models['action_decoder'](time=time, 
-                                                 noise=x_t, 
-                                                 memory_input=torch.cat([einops.rearrange(depth_head, 'b n h w d -> b (n h w) d'),
-                                                                         conditioning_info], dim=1),
-                                                 discrete_semantic_input=simulated_quantized_vec,)
-        
+        # for e in range(E):
+        #     idx = (expert_ids == e).nonzero(as_tuple=True)[0]  # indices routed to expert e
+        #     if idx.numel() == 0:
+        #         continue
+
+        #     # Slice per-expert mini-batch
+        #     time_e  = time_flat[idx]          # (Be,)
+        #     x_t_e   = x_t[idx]                # (Be, T, A)
+        #     mem_e   = memory_input[idx]       # (Be, S, D)
+        #     dx_t_e = dx_t_e[idx]
+
+        #     if discrete_semantic_input is None:
+        #         sem_e = None
+        #     else:
+        #         sem_e = discrete_semantic_input[idx]  # (Be, D) or (Be, K, D)
+
+        #     # Run only the selected expert on its sub-batch
+        #     dx_hat_e = self.models["moe_action_decoder"](
+        #         expert_id=e,
+        #         time=time_e,
+        #         noise=x_t_e,
+        #         memory_input=mem_e,
+        #         discrete_semantic_input=sem_e,
+        #     )  # (Be, T, A)
+
+        #     # Scatter back to original batch positions
+        #     dx_t_hat_full[idx] = dx_hat_e
+
+        err = torch.empty_like(gating)
+        for i in range(E):
+            dx_t_hat_i = self.models['moe_action_decoder'](
+                                                    expert_id=i,
+                                                    time=time, 
+                                                    noise=x_t, 
+                                                    memory_input=torch.cat([einops.rearrange(depth_head, 'b n h w d -> b (n h w) d'),
+                                                                            conditioning_info], dim=1),
+                                                    discrete_semantic_input=None,)
+            
+            err_i = (dx_t - dx_t_hat_i).pow(2)
+            err[: , i] = err_i.view(err_i.shape[0], -1).sum(dim=1)
+        print(err.shape)
+        moe_loss = (err * gating).sum(dim=1).mean()
+
         # EMA
         # For prior training --> since posterior is a moving target, naively doing l2 distance between the two destabilizes prior learning 
         with torch.no_grad():
@@ -123,25 +158,30 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
                                                  )  # e.g., returns posterior_cls_token_ema
             loss["True_prior_posterior"] = torch.sum(torch.pow(prior_cls_token.detach().clone() - posterior_cls_token.detach().clone(), 2), dim=-1, keepdim=False).mean().item()
         
-        err = (dx_t - dx_t_hat).pow(2)
-        velocity_loss = err.view(err.shape[0], -1).sum(dim=1).mean()
+        moe_actions = torch.empty((x_t.shape[0], E, x_t.shape[1], x_t.shape[2]))
+        for i in range(E):
+            dx_t_hat_i = self.models['moe_action_decoder'](
+                            expert_id=i,
+                            time=torch.zeros_like(time), 
+                            noise=noise, 
+                            memory_input=torch.cat([einops.rearrange(depth_head, 'b n h w d -> b (n h w) d'),
+                                                    conditioning_info], dim=1),
+                            discrete_semantic_input=None,)
+            moe_actions[:, i, :, :] = dx_t_hat_i
+
+        
     
-        sinkhorn_loss = self.loss(pred_action = noise + self.models['action_decoder'](
-                                                            time = torch.zeros_like(time), 
-                                                            noise = noise, 
-                                                            memory_input = torch.cat([einops.rearrange(depth_head, 'b n h w d -> b (n h w) d'),
-                                                                         conditioning_info], dim=1),
-                                                            discrete_semantic_input=simulated_quantized_vec,), 
-                                     target_action = data['action'], 
-                                     state_pred = data['observation.state'], 
-                                     state_target = data['observation.state'])
+        sinkhorn_loss = self.loss(pred_action = noise + moe_actions * gating, 
+                                  target_action = data['action'], 
+                                  state_pred = data['observation.state'], 
+                                  state_target = data['observation.state'])
         
         # Enforces the latent vectors to commit to respective vectors in the codebook
         commitment_loss = (posterior_cls_token - related_codebook_quantized_vec.detach()).pow(2).view(-1, posterior_cls_token.shape[-1]).sum(dim=-1).mean()
         
-        loss["Total"] = velocity_loss + 0.2 * sinkhorn_loss + 0.25 * commitment_loss
+        loss["Total"] = sinkhorn_loss #velocity_loss + 0.2 * sinkhorn_loss + 0.25 * commitment_loss
         loss["EMA_prior_posterior"] = torch.sum(torch.pow(prior_cls_token - posterior_target, 2).view(-1, prior_cls_token.shape[-1]), dim=-1, keepdim=False).mean()
-        loss["velocity"] = velocity_loss.detach().clone().item()
+        loss["MoE"] = moe_loss.detach().clone().item()
         loss["Sinkhorn"] = sinkhorn_loss.detach().clone().item()
         loss["posterior_codebook"] = commitment_loss.detach().clone().item()
             

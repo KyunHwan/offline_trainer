@@ -42,8 +42,8 @@ data:
     params:
       task_name: 'picknplace'
       local_files_only: false
-      root: '~/igris-b-pnp/lerobot_dataset_2/'
-      repo_id: 'joon001001/igris-b-pnp-lerobot_v2'
+      root: '~/igris-b-pnp/lerobot_dataset_3/'
+      repo_id: 'joon001001/igris-b-pnp-lerobot_v3'
       action_horizon: 40
       obs_proprio_history: 40
       obs_images_history: 1
@@ -54,7 +54,7 @@ data:
   persistent_workers: true
   prefetch_factor: 1
 train:
-  project_name: 'cfg_vqvae_flow_matching exp3'
+  project_name: 'naive_flow_matching_policy exp3'
   epoch: 1000
   load_dir: null
   save_every: 10
