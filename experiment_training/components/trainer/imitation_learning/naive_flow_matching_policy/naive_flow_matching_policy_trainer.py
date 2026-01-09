@@ -72,7 +72,7 @@ class Naive_Flow_Matching_Policy_Trainer(nn.Module):
                                                                          einops.rearrange(depth_left, 'b n h w d -> b (n h w) d'),
                                                                          einops.rearrange(depth_right, 'b n h w d -> b (n h w) d'),
                                                                          conditioning_info], dim=1),
-                                                 discrete_semantic_input=None,)
+                                                 discrete_semantic_input=head_image_semantic,)
         
         
         err = (dx_t - dx_t_hat).pow(2)

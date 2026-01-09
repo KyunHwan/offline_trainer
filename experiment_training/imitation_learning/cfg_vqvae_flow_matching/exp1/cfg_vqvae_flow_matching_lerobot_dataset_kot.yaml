@@ -2,7 +2,7 @@ plugins:
   - "experiment_training.components.dataloader.lerobot_data"
   - "experiment_training.components.loss.sinkhorn_knopp"
   - "experiment_training.components.optimizer.schedule_free_radam"
-  - "experiment_training.components.trainer.cfg_vqvae_flow_matching_trainer_kot"
+  - "experiment_training.components.trainer.imitation_learning.cfg_vqvae_flow_matching.cfg_vqvae_flow_matching_trainer_kot"
 model:
   find_unused_parameters: true
   component_config_paths:

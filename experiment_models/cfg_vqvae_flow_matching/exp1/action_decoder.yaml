@@ -3,7 +3,6 @@ schema_version: 1
 params:
   action_dim: 24
   action_chunk_size: 40
-  use_cond_semantic_projection: false
   use_cond_semantic: true
 
   transformer_d_model: 1024
@@ -33,7 +32,6 @@ model:
         transformer_tgt_is_causal: ${params.transformer_tgt_is_causal}
         transformer_num_layers: ${params.transformer_num_layers}
         transformer_action_chunk_size: ${params.action_chunk_size}
-        use_cond_semantic_projection: ${params.use_cond_semantic_projection}
         use_cond_semantic: ${params.use_cond_semantic}
         cond_semantic_dim: ${params.transformer_d_model}
     nodes:

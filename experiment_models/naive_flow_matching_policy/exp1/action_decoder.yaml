@@ -3,9 +3,8 @@ schema_version: 1
 params:
   action_dim: 24
   action_chunk_size: 40
-  use_cond_semantic_projection: false
-  use_cond_semantic: false
-  cond_semantic_dim: null
+  use_cond_semantic: true
+  cond_semantic_dim: 3072
 
   transformer_d_model: 1024
   transformer_nhead: 16
@@ -14,7 +13,7 @@ params:
   transformer_activation: gelu
   transformer_batch_first: true
   transformer_tgt_is_causal: true
-  transformer_num_layers: 14
+  transformer_num_layers: 16
 
   
 
@@ -23,7 +22,7 @@ model:
     inputs: [time, noise, memory_input, discrete_semantic_input]
     modules:
       action_decoder:
-        _type_: cfg_vqvae_action_decoder
+        _type_: naive_action_decoder
         action_dim: ${params.action_dim}
         transformer_d_model: ${params.transformer_d_model}
         transformer_nhead: ${params.transformer_nhead}
@@ -34,7 +33,6 @@ model:
         transformer_tgt_is_causal: ${params.transformer_tgt_is_causal}
         transformer_num_layers: ${params.transformer_num_layers}
         transformer_action_chunk_size: ${params.action_chunk_size}
-        use_cond_semantic_projection: ${params.use_cond_semantic_projection}
         use_cond_semantic: ${params.use_cond_semantic}
         cond_semantic_dim: ${params.cond_semantic_dim}
     nodes:

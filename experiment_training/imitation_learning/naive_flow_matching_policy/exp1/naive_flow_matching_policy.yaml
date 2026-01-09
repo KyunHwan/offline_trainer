@@ -1,7 +1,7 @@
 plugins:
   - "experiment_training.components.dataloader.lerobot_data"
   - "experiment_training.components.optimizer.schedule_free_radam"
-  - "experiment_training.components.trainer.naive_flow_matching_policy_trainer"
+  - "experiment_training.components.trainer.imitation_learning.naive_flow_matching_policy.naive_flow_matching_policy_trainer"
 model:
   find_unused_parameters: true
   component_config_paths:

@@ -10,7 +10,7 @@ model:
     inputs: [cond_proprio, cond_visual]
     modules:
       proprio_projector:
-        _type_: proprio_projector
+        _type_: cfg_vqvae_proprio_projector
         cond_proprio_dim: ${params.cond_proprio_dim}
         transformer_d_model: ${params.transformer_d_model}
     
