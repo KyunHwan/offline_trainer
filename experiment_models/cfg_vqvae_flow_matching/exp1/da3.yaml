@@ -9,6 +9,7 @@ model:
     modules:
       da3:
         _type_: da3
+        resize_method: ${params.resize_method}
 
     nodes:
       - name: da3

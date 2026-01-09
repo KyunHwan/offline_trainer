@@ -12,6 +12,7 @@ model:
       radiov3:
         _type_: radiov3
         channels: ${params.channels}
+        resize_method: ${params.resize_method}
 
     nodes:
       - name: radiov3_out

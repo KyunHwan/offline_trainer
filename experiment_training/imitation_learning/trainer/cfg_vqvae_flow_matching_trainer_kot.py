@@ -48,12 +48,8 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
             right_image_features = einops.rearrange(right_image_features, 'b c h w -> b 1 c h w')
 
             """ Depth """
-            depth_head = self.models['da3'](image=data['observation.images.cam_head'], export_feat_layers=[1, 5, 10, 23])
-            print(depth_head.keys())
-            print(type(depth_head['aux']))
-            print(depth_head['aux']['feat_layer_1'].shape)
-            print(depth_head['aux']['feat_layer_10'].shape)
-            print(depth_head['aux']['feat_layer_23'].shape)
+            # outputs (batch, num_features, height, width, feature_dim) shaped latent features
+            depth_head = self.models['da3'](image=data['observation.images.cam_head'], export_feat_layers=[8, 13, 18, 23])
 
         """ VQVAE Posterior """
         posterior_cls_token = self.models['vqvae_posterior'](cond_proprio=data['observation.state'],
@@ -97,10 +93,10 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
         """ Proprio Projection """
         # Assumes that proprio feature dimension will be matched to that of visual
         conditioning_info = self.models['proprio_projector'](cond_proprio=data['observation.state'],
-                                                                cond_visual=torch.cat([head_image_features, 
-                                                                                        left_image_features, 
-                                                                                        right_image_features],
-                                                                                        axis=1),)
+                                                            cond_visual=torch.cat([head_image_features,
+                                                                                    left_image_features, 
+                                                                                    right_image_features],
+                                                                                    dim=1),)
 
         """ Flow Matching """
         noise = torch.randn_like(data['action'], device=data['action'].device)
@@ -112,7 +108,8 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
 
         dx_t_hat = self.models['action_decoder'](time=time, 
                                                  noise=x_t, 
-                                                 memory_input=conditioning_info, 
+                                                 memory_input=torch.cat([einops.rearrange(depth_head, 'b n h w d -> b (n h w) d'),
+                                                                         conditioning_info], dim=1),
                                                  discrete_semantic_input=simulated_quantized_vec,)
         
         # EMA
