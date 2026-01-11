@@ -11,6 +11,11 @@ from offline_trainer.registry import TRAINER_REGISTRY
 from typing import Any
 import copy
 
+import torch
+import torch.distributed as distributed
+
+import math
+
 
 @TRAINER_REGISTRY.register("variational_flow_matching_policy_trainer")
 class Variational_Flow_Matching_Policy_Trainer(nn.Module):
@@ -34,7 +39,7 @@ class Variational_Flow_Matching_Policy_Trainer(nn.Module):
             p.requires_grad_(False)
         self.posterior_ema_factor = 0.999
 
-    def forward(self, data: dict[str, Any], epoch, total_epochs) -> dict[str, torch.Tensor]:
+    def forward(self, data: dict[str, Any], epoch, total_epochs, iterations) -> dict[str, torch.Tensor]:
         loss = {}
 
         """ Backbone """
@@ -119,7 +124,7 @@ class Variational_Flow_Matching_Policy_Trainer(nn.Module):
                                   state_pred = data['observation.state'], 
                                   state_target = data['observation.state'])
 
-        # EMA
+        """ EMA """
         # For prior training --> since posterior is a moving target, naively doing l2 distance between the two destabilizes prior learning 
         with torch.no_grad():
             self.posterior_ema.eval()
@@ -133,11 +138,46 @@ class Variational_Flow_Matching_Policy_Trainer(nn.Module):
         # Enforces the latent vectors to commit to respective vectors in the codebook
         commitment_loss = (posterior_cls_token - related_codebook_quantized_vec.detach()).pow(2).view(-1, posterior_cls_token.shape[-1]).sum(dim=-1).mean()
         
-        loss["Total"] = moe_loss + 0.2 * sinkhorn_loss + 0.25 * commitment_loss
+        """ Activated Expert """
+        with torch.no_grad():
+            expert_ids = gating.detach().argmax(dim=1)  # (B_local,)
+
+            # local histogram (E,)
+            local_counts = torch.bincount(expert_ids, minlength=E).to(dtype=torch.long)
+
+            # aggregate across ranks
+            if distributed.is_available() and distributed.is_initialized():
+                distributed.all_reduce(local_counts, op=distributed.ReduceOp.SUM)
+            
+            winner_id = int(local_counts.argmax().item())  # tie-break: lowest id wins
+
+            total_samples = local_counts.sum()
+            probs = local_counts / total_samples  # Shape: (E,)
+            indices = torch.arange(len(local_counts), device=local_counts.device, dtype=local_counts.dtype)
+            expected_expert_id = (indices * probs).sum().item()
+        
+        loss["Most Frequently Activated Expert"] = winner_id
+        loss["Expected Activated Expert"] = expected_expert_id
+
+        """ Uniform Dist Regularization for Gating """
+        gating_sum = gating.sum(dim=0)                 # (E,)
+        local_B = torch.tensor([B], device=self.device, dtype=torch.float32)
+
+        p_bar = gating_sum / local_B.clamp_min(1.0)          # (E,)
+        p_bar = p_bar.clamp_min(1e-8)
+
+        # KL(p_bar || uniform)
+        log_u = -math.log(E)
+        kl = (p_bar * (p_bar.log() - log_u)).sum()
+
+        loss["Total"] = moe_loss + 0.2 * sinkhorn_loss + 0.25 * commitment_loss + 10000 * math.pow(0.1, iterations/4500) * kl
+        loss["Gating_Uniform"] = kl.detach().clone().item()
         loss["EMA_prior_posterior"] = torch.sum(torch.pow(prior_cls_token - posterior_target, 2).view(-1, prior_cls_token.shape[-1]), dim=-1, keepdim=False).mean()
         loss["velocity"] = moe_loss.detach().clone().item()
         loss["Sinkhorn"] = sinkhorn_loss.detach().clone().item()
         loss["posterior_codebook"] = commitment_loss.detach().clone().item()
+
+        
             
         return loss, posterior_cls_token.detach().clone()
 
@@ -148,7 +188,7 @@ class Variational_Flow_Matching_Policy_Trainer(nn.Module):
         self._ready_train()
         self._zero_grad()
 
-        loss, continuous_vec = self.forward(data, epoch, total_epochs)
+        loss, continuous_vec = self.forward(data, epoch, total_epochs, iterations)
 
         self._backward(loss)
         self._step()
@@ -161,7 +201,7 @@ class Variational_Flow_Matching_Policy_Trainer(nn.Module):
         except:
             pass
         detached_loss = self._detached_loss(loss)
-        if epoch < 1 and iterations % ((epoch + 1) * 20) == 0:
+        if epoch < 2 and iterations % ((epoch + 1) * 5) == 0:
             with torch.no_grad():
                 output = self.models['vqvae_codebook'](continuous_vec=continuous_vec, train=True, replacement=True)
                 self._reset_opt_state_rows(output['dead_indices'])
