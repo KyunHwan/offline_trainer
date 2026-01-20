@@ -437,6 +437,7 @@ def train(config_path: str) -> None:
                     data['action'] = (data['action'] - stats_cpu['action']['mean']) / (stats_cpu['action']['std'] + 1e-8)
                     data['observation.state'] = (data['observation.state'] - stats_cpu['observation.state']['mean']) / (stats_cpu['observation.state']['std'] + 1e-8)
                     data['observation.current'] = (data['observation.current'] - stats_cpu['observation.current']['mean']) / (stats_cpu['observation.current']['std'] + 1e-8)
+                    data['observation.proprio_state'] = data['observation.state']
                     data['observation.state'] = torch.concat([data['observation.state'], data['observation.current']], dim=-1)
                     data = cast_dtype(data, torch.float32)
                     loss_dict = trainer.train_step(data=move_to_device(data, device), epoch=epoch, total_epochs=config.train.epoch, iterations=iterations)

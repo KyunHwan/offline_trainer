@@ -37,33 +37,40 @@ class Naive_Flow_Matching_Policy_Trainer(nn.Module):
         """ State """
         with torch.no_grad():
             state_vae_input = {
-                'cam_1': F.interpolate(
+                'state': data['observation.proprio_state'],
+                'cam_0': F.interpolate(
                             data['observation.images.cam_head'],
                             size=(128, 128),
                             mode="bilinear",
                             align_corners=False,),
-                'cam_2': F.interpolate(
-                            data['observation.images.cam_left'],
-                            size=(128, 128),
-                            mode="bilinear",
-                            align_corners=False,),
-                'cam_3': F.interpolate(
-                            data['observation.images.cam_right'],
-                            size=(128, 128),
-                            mode="bilinear",
-                            align_corners=False,),
-                'state': data['observation.state']
+                # 'cam_1': F.interpolate(
+                #             data['observation.images.cam_left'],
+                #             size=(128, 128),
+                #             mode="bilinear",
+                #             align_corners=False,),
+                # 'cam_2': F.interpolate(
+                #             data['observation.images.cam_right'],
+                #             size=(128, 128),
+                #             mode="bilinear",
+                #             align_corners=False,),
+                
             }
 
         encoded_state = self.models['state_encoder'](state_vae_input)['embedding']
         recon_output = self.models['state_decoder'](encoded_state + torch.randn_like(encoded_state))
 
         img_recon_loss = 0.0
-        for key in state_vae_input.keys():
-            img_recon_loss += (recon_output[key] - state_vae_input[key]).pow(2).mean(2)
+        for i in range(1):
+            img_recon_loss += (recon_output[f'cam_{i}'] - state_vae_input[f'cam_{i}']).pow(2).mean()
+        action_recon_loss = (action_recon - data['action']).pow(2).mean()
+        state_recon_loss = (recon_output['state'] - state_vae_input['state']).pow(2).mean()
         loss["total"] = 0.01 * ((encoded_action - torch.zeros_like(encoded_action)).pow(2).mean() +\
                                 (encoded_state - torch.zeros_like(encoded_state)).pow(2).mean()) +\
-                        0.005 * img_recon_loss
+                        0.005 * (img_recon_loss + action_recon_loss + state_recon_loss)
+    
+        loss['img_recon'] = img_recon_loss.detach().clone().item()
+        loss['action_recon'] = action_recon_loss.detach().clone().item()
+        loss['state_recon'] = state_recon_loss.detach().clone().item()
             
         return loss
 
@@ -83,7 +90,8 @@ class Naive_Flow_Matching_Policy_Trainer(nn.Module):
     def _ready_train(self):
         for key in self.optimizers.keys():
             self.models[key].train()
-            self.optimizers[key].train()
+            if hasattr(self.optimizers[key], 'train'): 
+                self.optimizers[key].train()
             
     def _zero_grad(self):
         for key in self.optimizers.keys():
@@ -103,7 +111,7 @@ class Naive_Flow_Matching_Policy_Trainer(nn.Module):
         detached_loss = {}
         for key in loss.keys():
             if isinstance(loss[key], torch.Tensor):
-                detached_loss[key] = loss[key].detach().item()
+                detached_loss[key] = loss[key].detach().clone().item()
             else:
                 detached_loss[key] = loss[key]
         return detached_loss

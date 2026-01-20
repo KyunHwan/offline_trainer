@@ -8,74 +8,6 @@ from torch.optim.lr_scheduler import OneCycleLR
 
 from offline_trainer.registry import OPTIMIZER_BUILDER_REGISTRY
 
-@OPTIMIZER_BUILDER_REGISTRY.register("adamw_cosine_schedule")
-class AdamW_Cosine_Scheduler_Builder(nn.Module):
-    def __init__(self, 
-                 lr: float, 
-                 betas: tuple(float, float), 
-                 eps: float,
-                 weight_decay: float,
-
-                 max_lr: float,
-                 total_steps: int | None,
-                 epochs: int | None,
-                 steps_per_epoch: int | None,
-                 pct_start: float,
-                 anneal_strategy: str,
-                 cycle_momentum: bool,
-                 base_momentum: float,
-                 max_momentum: float,
-                 div_factor:float, 
-                 final_div_factor: float,
-                 three_phase: bool,
-                 last_epoch: int,
-                 ):
-        # Optimizer
-        self.lr = lr
-        self.betas = tuple(betas)
-        self.eps=eps,
-        self.weight_decay=weight_decay
-
-        # CosineLR
-        self.max_lr = max_lr
-        self.total_steps = total_steps
-        self.epochs = epochs
-        self.steps_per_epoch = steps_per_epoch
-        self.pct_start = pct_start
-        self.anneal_strategy = anneal_strategy
-        self.cycle_momentum = cycle_momentum 
-        self.base_momentum = base_momentum
-        self.max_momentum = max_momentum
-        self.div_factor = div_factor
-        self.final_div_factor = final_div_factor
-        self.three_phase = three_phase
-        self.last_epoch = last_epoch
-    
-    def build(self, 
-              params
-             ) -> AdamWWithOneCycle:
-        
-       return AdamWWithOneCycle(
-            params=params,
-            lr=self.lr,
-            betas=self.betas,
-            eps=self.eps,
-            weight_decay=self.weight_decay,
-            max_lr=self.max_lr,
-            total_steps=self.total_steps,
-            epochs=self.epochs,
-            steps_per_epoch=self.steps_per_epoch,
-            pct_start=self.pct_start,
-            anneal_strategy=self.anneal_strategy,
-            cycle_momentum=self.cycle_momentum,
-            base_momentum=self.base_momentum,
-            max_momentum=self.max_momentum,
-            div_factor=self.div_factor,
-            final_div_factor=self.final_div_factor,
-            three_phase=self.three_phase,
-            last_epoch=self.last_epoch,
-        )
-
 class AdamWWithOneCycle(AdamW):
     """
     AdamW optimizer that owns a OneCycleLR scheduler and saves/loads both states
@@ -86,7 +18,7 @@ class AdamWWithOneCycle(AdamW):
         self,
         params,
         lr: float,
-        betas: Tuple[float, float] = (0.9, 0.999),
+        betas: list[float, float] = [0.9, 0.999],
         eps: float = 1e-8,
         weight_decay: float = 0.0,
         *,
@@ -169,3 +101,72 @@ class AdamWWithOneCycle(AdamW):
 
         if sched_sd is not None:
             self.scheduler.load_state_dict(sched_sd)
+
+@OPTIMIZER_BUILDER_REGISTRY.register("adamw_cosine_schedule")
+class AdamW_Cosine_Scheduler_Builder(nn.Module):
+    def __init__(self, 
+                 lr: float, 
+                 betas: list[float], 
+                 eps: float,
+                 weight_decay: float,
+
+                 max_lr: float,
+                 total_steps: int | None,
+                 epochs: int | None,
+                 steps_per_epoch: int | None,
+                 pct_start: float,
+                 anneal_strategy: str,
+                 cycle_momentum: bool,
+                 base_momentum: float,
+                 max_momentum: float,
+                 div_factor:float, 
+                 final_div_factor: float,
+                 three_phase: bool,
+                 last_epoch: int,
+                 ):
+        # Optimizer
+        self.lr = lr
+        self.betas = betas
+        self.eps = eps
+        self.weight_decay = weight_decay
+
+        # CosineLR
+        self.max_lr = max_lr
+        self.total_steps = total_steps
+        self.epochs = epochs
+        self.steps_per_epoch = steps_per_epoch
+        self.pct_start = pct_start
+        self.anneal_strategy = anneal_strategy
+        self.cycle_momentum = cycle_momentum 
+        self.base_momentum = base_momentum
+        self.max_momentum = max_momentum
+        self.div_factor = div_factor
+        self.final_div_factor = final_div_factor
+        self.three_phase = three_phase
+        self.last_epoch = last_epoch
+    
+    def build(self, 
+              params
+             ) -> AdamWWithOneCycle:
+        
+       return AdamWWithOneCycle(
+            params=params,
+            lr=self.lr,
+            betas=self.betas,
+            eps=self.eps,
+            weight_decay=self.weight_decay,
+            max_lr=self.max_lr,
+            total_steps=self.total_steps,
+            epochs=self.epochs,
+            steps_per_epoch=self.steps_per_epoch,
+            pct_start=self.pct_start,
+            anneal_strategy=self.anneal_strategy,
+            cycle_momentum=self.cycle_momentum,
+            base_momentum=self.base_momentum,
+            max_momentum=self.max_momentum,
+            div_factor=self.div_factor,
+            final_div_factor=self.final_div_factor,
+            three_phase=self.three_phase,
+            last_epoch=self.last_epoch,
+        )
+

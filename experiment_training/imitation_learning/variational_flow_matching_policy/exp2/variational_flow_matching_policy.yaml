@@ -1,0 +1,165 @@
+plugins:
+  - "experiment_training.components.dataloader.lerobot_data"
+  - "experiment_training.components.loss.sinkhorn_knopp"
+  - "experiment_training.components.optimizer.adamw_cosine_decay"
+  - "experiment_training.components.trainer.imitation_learning.variational_flow_matching_policy.variational_flow_matching_policy_trainer"
+model:
+  find_unused_parameters: true
+  component_config_paths:
+    backbone: "experiment_models/variational_flow_matching_policy/exp2/backbone.yaml"
+    da3: "experiment_models/variational_flow_matching_policy/exp2/da3.yaml"
+    vqvae_posterior: "experiment_models/variational_flow_matching_policy/exp2/vqvae_posterior.yaml"
+    vqvae_prior: "experiment_models/variational_flow_matching_policy/exp2/vqvae_prior.yaml"
+    gate: "experiment_models/variational_flow_matching_policy/exp2/gate.yaml"
+    proprio_projector: "experiment_models/variational_flow_matching_policy/exp2/proprio_projector.yaml"
+    moe_action_decoder: "experiment_models/variational_flow_matching_policy/exp2/moe_action_decoder.yaml"
+    
+  component_build_args:
+    backbone:
+      init: false
+      freeze: true
+    da3:
+      init: false
+      freeze: true
+    vqvae_posterior:
+      init: true
+      freeze: false
+    vqvae_prior:
+      init: true
+      freeze: false
+    gate:
+      init: true
+      freeze: false
+    proprio_projector:
+      init: true
+      freeze: false
+    moe_action_decoder:
+      init: true
+      freeze: false
+  component_optims:
+    vqvae_posterior:
+      type: "adamw_warmup_cosine_decay"
+      params:
+        lr: 1.0e-4 # AdamW
+        betas: [0.9, 0.999]
+        eps: 1.0e-9
+        weight_decay: 0.01
+        max_lr: 1.0e-3 # OneCycleLR
+        total_steps: 1000000
+        epochs: null
+        steps_per_epoch: null
+        pct_start: 0.01
+        warmup_strategy: 'linear'
+        div_factor: 25.0
+        final_div_factor: 10000.0
+        alpha: null
+        exponent: 1.0
+        last_epoch: -1
+    vqvae_prior:
+      type: "adamw_warmup_cosine_decay"
+      params:
+        lr: 1.0e-4 # AdamW
+        betas: [0.9, 0.999]
+        eps: 1.0e-9
+        weight_decay: 0.01
+        max_lr: 1.0e-3 # OneCycleLR
+        total_steps: 1000000
+        epochs: null
+        steps_per_epoch: null
+        pct_start: 0.01
+        warmup_strategy: 'linear'
+        div_factor: 25.0
+        final_div_factor: 10000.0
+        alpha: null
+        exponent: 1.0
+        last_epoch: -1
+    gate:
+      type: "adamw_warmup_cosine_decay"
+      params:
+        lr: 1.0e-4 # AdamW
+        betas: [0.9, 0.999]
+        eps: 1.0e-9
+        weight_decay: 0.01
+        max_lr: 1.0e-3 # OneCycleLR
+        total_steps: 1000000
+        epochs: null
+        steps_per_epoch: null
+        pct_start: 0.01
+        warmup_strategy: 'linear'
+        div_factor: 25.0
+        final_div_factor: 10000.0
+        alpha: null
+        exponent: 1.0
+        last_epoch: -1
+    proprio_projector:
+      type: "adamw_warmup_cosine_decay"
+      params:
+        lr: 1.0e-4 # AdamW
+        betas: [0.9, 0.999]
+        eps: 1.0e-9
+        weight_decay: 0.01
+        max_lr: 1.0e-3 # OneCycleLR
+        total_steps: 1000000
+        epochs: null
+        steps_per_epoch: null
+        pct_start: 0.01
+        warmup_strategy: 'linear'
+        div_factor: 25.0
+        final_div_factor: 10000.0
+        alpha: null
+        exponent: 1.0
+        last_epoch: -1
+    moe_action_decoder:
+      type: "adamw_warmup_cosine_decay"
+      params:
+        lr: 1.0e-4 # AdamW
+        betas: [0.9, 0.999]
+        eps: 1.0e-9
+        weight_decay: 0.01
+        max_lr: 1.0e-3 # OneCycleLR
+        total_steps: 1000000
+        epochs: null
+        steps_per_epoch: null
+        pct_start: 0.01
+        warmup_strategy: 'linear'
+        div_factor: 25.0
+        final_div_factor: 10000.0
+        alpha: null
+        exponent: 1.0
+        last_epoch: -1
+
+
+data:
+  datamodule:
+    type: "lerobot_dataset_factory"
+    params:
+      task_name: 'picknplace'
+      local_files_only: false
+      root: '.'
+      repo_id: 'joon001001/igris-b-pnp_v3.1'
+      action_horizon: 40
+      obs_proprio_history: 40
+      obs_images_history: 1
+      HZ: 20
+  batch_size: 16
+  num_workers: 12
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 1
+train:
+  project_name: 'variational_flow_matching_policy exp2'
+  epoch: 1000
+  load_dir: null
+  save_every: 3
+  save_dir: "experiment_training/imitation_learning/variational_flow_matching_policy/exp2"
+  trainer: 
+    type: 'variational_flow_matching_policy_trainer'
+  loss:
+    type: "sinkhorn_knopp"
+    params:
+      p: 1
+      lam_state: 0.2
+      blur: 0.004
+      debias: True       
+      backend: "auto"
+      scaling: 0.5

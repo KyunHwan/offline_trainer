@@ -3,7 +3,7 @@ schema_version: 1
 params:
   out_channels: 3
   final_activation: "sigmoid"
-  num_images: 3
+  num_images: 1
   img_embedding_dim: 24
   state_embedding_dim: 24
   hidden_dim: 1024

@@ -191,7 +191,8 @@ class CFG_VQVAE_Flow_Matching_Trainer(nn.Module):
     def _ready_train(self):
         for key in self.optimizers.keys():
             self.models[key].train()
-            self.optimizers[key].train()
+            if hasattr(self.optimizers[key], 'train'): 
+                self.optimizers[key].train()
             
     def _zero_grad(self):
         for key in self.optimizers.keys():
