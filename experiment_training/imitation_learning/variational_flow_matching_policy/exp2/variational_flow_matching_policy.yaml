@@ -136,7 +136,7 @@ data:
       task_name: 'picknplace'
       local_files_only: false
       root: '.'
-      repo_id: 'joon001001/igris-b-pnp_v3.1'
+      repo_id: 'joon001001/igris-b-pnp_v3.3.2'
       action_horizon: 40
       obs_proprio_history: 40
       obs_images_history: 1

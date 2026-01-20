@@ -191,7 +191,7 @@ class Variational_Flow_Matching_Policy_Trainer(nn.Module):
         #loss["Gating_Uniform"] = kl.detach().clone().item()
         
 
-        loss["Total"] = moe_loss + 0.5 * sinkhorn_loss + 0.1 * kl
+        loss["Total"] = moe_loss + 0.2 * sinkhorn_loss + kl
         loss["prior_posterior"] = kl.detach().clone().item()
         loss["velocity"] = moe_loss.detach().clone().item()
         loss["Sinkhorn"] = sinkhorn_loss.detach().clone().item()

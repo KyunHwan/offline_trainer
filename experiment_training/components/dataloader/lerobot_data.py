@@ -76,12 +76,12 @@ class LerobotDatasetFactory:
                                      root=root, 
                                      delta_timestamps=delta_timestamps, 
                                      image_transforms=torchvision_transforms,
-                                     episodes=list(range(1218, total_episodes))) 
+                                     )#episodes=list(range(1218, total_episodes))) 
         else:
             dataset = LeRobotDataset(repo_id=repo_id, 
                                      delta_timestamps=delta_timestamps, 
                                      image_transforms=torchvision_transforms,
-                                     episodes=list(range(1218, total_episodes)))
+                                     )#episodes=list(range(1218, total_episodes)))
 
         stats = dataset.meta.stats
         
