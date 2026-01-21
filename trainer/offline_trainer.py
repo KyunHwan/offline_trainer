@@ -248,14 +248,31 @@ def _build_dataloader(config, world_rank=0, local_rank=0, world_size=0, enable_d
             elif key == 'norm_stats':
                 stats = returned_product[key]
                 if local_rank == 0:
-                    try:
-                        stats_path = os.path.join(config.train.save_dir, f"dataset_stats.pkl")
-                        with open(stats_path, "wb") as f:
-                            pickle.dump(stats, f)
-                    except:
-                        stats_path = Path(os.path.join(config.train.save_dir, f"dataset_stats.pkl")).expanduser()
-                        with open(stats_path, "wb") as f:
-                            pickle.dump(stats, f)
+                    # Construct the full path
+                    save_dir = config.train.save_dir
+                    stats_path = os.path.join(save_dir, "dataset_stats.pkl")
+                    
+                    # 1. Expand user if necessary (e.g. handle '~')
+                    stats_path = os.path.expanduser(stats_path)
+                    dir_name = os.path.dirname(stats_path)
+
+                    # 2. Create the directory if it doesn't exist
+                    os.makedirs(dir_name, exist_ok=True)
+
+                    # 3. Now safe to write the file
+                    with open(stats_path, "wb") as f:
+                        pickle.dump(stats, f)
+            # elif key == 'norm_stats':
+            #     stats = returned_product[key]
+            #     if local_rank == 0:
+            #         try:
+            #             stats_path = os.path.join(config.train.save_dir, f"dataset_stats.pkl")
+            #             with open(stats_path, "wb") as f:
+            #                 pickle.dump(stats, f)
+            #         except:
+            #             stats_path = Path(os.path.join(config.train.save_dir, f"dataset_stats.pkl")).expanduser()
+            #             with open(stats_path, "wb") as f:
+            #                 pickle.dump(stats, f)
     else: 
         dataset = returned_product
         stats = None

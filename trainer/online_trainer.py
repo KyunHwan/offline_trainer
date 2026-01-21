@@ -31,6 +31,9 @@ from trainer.utils.device import move_to_device, cast_dtype
 from trainer.utils.tree import tree_map
 
 import ray
+import ray.train
+import ray.train.torch
+
 import torch
 import torch.nn as nn
 import torch.nn.init as init
@@ -105,19 +108,9 @@ def find_unregistered_tensors(m: nn.Module):
                 weird.append((mod_name, k, str(v.device), tuple(v.shape), str(v.dtype)))
     return weird
 
-def _dist_setup(enable_dist_train, device) -> None:
-    if enable_dist_train:
-        dist.init_process_group(backend="nccl",
-                                init_method="env://",
-                                )
-
 def _dist_barrier(dist_enabled, local_rank) -> None:
     if dist_enabled:
         dist.barrier(device_ids=[local_rank])
-
-def _dist_cleanup(enable_dist_train) -> None:
-    if enable_dist_train:
-        dist.destroy_process_group()
 
 
 
@@ -173,6 +166,9 @@ def _build_models(world_size, global_rank, local_rank, enable_dist_train, config
             for param in policy.parameters():
                 param.requires_grad_(False)
             policy.eval()
+            policy = policy.to(device)
+            models[k] = policy
+            continue
 
         # If BatchNorm layers in a real model, convert to SyncBatchNorm so BN stats sync across replicas
         # This should be before moving the model onto a device
@@ -186,7 +182,8 @@ def _build_models(world_size, global_rank, local_rank, enable_dist_train, config
         # For example, when mixture of experts is used.
         find_unused_parameters = getattr(config.model, "find_unused_parameters", False)
 
-        models[k] = DDP(policy, find_unused_parameters=find_unused_parameters) if enable_dist_train and not frozen else policy
+        models[k] = ray.train.torch.prepare_model(model=policy, 
+                                                  parallel_strategy_kwargs={"find_unused_parameters": find_unused_parameters})
 
     if local_rank == 0: 
         print(f"Total Parameters: {model_total_params:.1f} M")
@@ -247,14 +244,31 @@ def _build_dataloader(config, world_rank=0, local_rank=0, world_size=0, enable_d
             elif key == 'norm_stats':
                 stats = returned_product[key]
                 if local_rank == 0:
-                    try:
-                        stats_path = os.path.join(config.train.save_dir, f"dataset_stats.pkl")
-                        with open(stats_path, "wb") as f:
-                            pickle.dump(stats, f)
-                    except:
-                        stats_path = Path(os.path.join(config.train.save_dir, f"dataset_stats.pkl")).expanduser()
-                        with open(stats_path, "wb") as f:
-                            pickle.dump(stats, f)
+                    # Construct the full path
+                    save_dir = config.train.save_dir
+                    stats_path = os.path.join(save_dir, "dataset_stats.pkl")
+                    
+                    # 1. Expand user if necessary (e.g. handle '~')
+                    stats_path = os.path.expanduser(stats_path)
+                    dir_name = os.path.dirname(stats_path)
+
+                    # 2. Create the directory if it doesn't exist
+                    os.makedirs(dir_name, exist_ok=True)
+
+                    # 3. Now safe to write the file
+                    with open(stats_path, "wb") as f:
+                        pickle.dump(stats, f)
+            # elif key == 'norm_stats':
+            #     stats = returned_product[key]
+            #     if local_rank == 0:
+            #         try:
+            #             stats_path = os.path.join(config.train.save_dir, f"dataset_stats.pkl")
+            #             with open(stats_path, "wb") as f:
+            #                 pickle.dump(stats, f)
+            #         except:
+            #             stats_path = Path(os.path.join(config.train.save_dir, f"dataset_stats.pkl")).expanduser()
+            #             with open(stats_path, "wb") as f:
+            #                 pickle.dump(stats, f)
     else: 
         dataset = returned_product
         stats = None
@@ -264,9 +278,7 @@ def _build_dataloader(config, world_rank=0, local_rank=0, world_size=0, enable_d
 
     # When using DistributedSampler, do NOT set shuffle=True on DataLoader.
     # Shuffling is handled by the sampler (see PyTorch DDP tutorial pattern)
-    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=world_rank, drop_last=True) if enable_dist_train else RandomSampler(dataset)
     dataloader = ray.train.torch.prepare_data_loader(DataLoader(dataset, 
-                            sampler=sampler, 
                             batch_size=config.data.batch_size,
                             num_workers=config.data.num_workers,
                             pin_memory=config.data.pin_memory,
@@ -275,7 +287,7 @@ def _build_dataloader(config, world_rank=0, local_rank=0, world_size=0, enable_d
                             worker_init_fn=seed_worker,
                             drop_last=False,
                             shuffle=False))
-    return dataloader, sampler, stats
+    return dataloader, stats
 
 def _build_trainer(world_size, global_rank, local_rank, enable_dist_train, config, device) -> Trainer:
     """
@@ -376,24 +388,14 @@ def train_func(config_path: str) -> None:
     config: ExperimentConfig = validate_config(raw)
     load_plugins(config.plugins)
 
-    world_size = int(os.environ.get("WORLD_SIZE", 1))
-    enable_dist_train = world_size > 1 and torch.cuda.is_available() and dist.is_available() 
+    context = ray.train.get_context()
+    world_size = context.get_world_size()
+    local_rank = context.get_local_rank()
+    rank = context.get_world_rank() # Global rank
 
-    if enable_dist_train and torch.cuda.is_available():
-        assert "LOCAL_RANK" in os.environ, "LOCAL_RANK missing; launch with torchrun."
-        local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        torch.cuda.set_device(local_rank)
-        device = torch.device(f"cuda:{local_rank}")
-    else:
-        local_rank = 0
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Initialize the process group for distributed training
-    # This initialization is needed to enable cross-GPU communication
-    _dist_setup(enable_dist_train, device)
-
-    rank = dist.get_rank() if enable_dist_train else 0
-    world_size = dist.get_world_size() if enable_dist_train else 1
+    # Ray automatically sets CUDA_VISIBLE_DEVICES so this is always safe
+    device = ray.train.torch.get_device() 
+    enable_dist_train = world_size > 1
 
     if rank == 0:
         # Pass the config dictionary so you can filter by hyperparameters in the UI
@@ -420,7 +422,7 @@ def train_func(config_path: str) -> None:
     # This ensures distinct stochastic behavior per GPU
     set_global_seed(seed=base_seed + rank)
     _dist_barrier(enable_dist_train, local_rank)
-    dataloader, sampler, stats = _build_dataloader(config=config, world_rank=rank, local_rank=local_rank, world_size=world_size, enable_dist_train=enable_dist_train)
+    dataloader, stats = _build_dataloader(config=config, world_rank=rank, local_rank=local_rank, world_size=world_size, enable_dist_train=enable_dist_train)
     num_iter_per_epoch = float(len(dataloader))
     try:
         stats_cpu = tree_map(map_list_to_torch, stats)
@@ -435,6 +437,12 @@ def train_func(config_path: str) -> None:
         
         # Get handle to policy state manager
         policy_state_manager = ray.get_actor("policy_state_manager")
+
+        replay_buffer_size = 0
+        while replay_buffer_size < config.data.batch_size * 2 * world_size:
+            replay_buffer_size = ray.get(replay_buffer.size.remote())
+            print("replay buffer size: ", replay_buffer_size)
+        print("replay buffer has been filled!")
 
         while True:
             # --- Source A: Offline Data ---
@@ -454,12 +462,12 @@ def train_func(config_path: str) -> None:
             online_data = ray.get(future)
 
             # --- Combine & Train ---
-            
+            stats_gpu = move_to_device(stats_cpu, device)
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 # normalize offline data
-                offline_data['action'] = (offline_data['action'] - stats_cpu['action']['mean']) / (stats_cpu['action']['std'] + 1e-8)
-                offline_data['observation.state'] = (offline_data['observation.state'] - stats_cpu['observation.state']['mean']) / (stats_cpu['observation.state']['std'] + 1e-8)
-                offline_data['observation.current'] = (offline_data['observation.current'] - stats_cpu['observation.current']['mean']) / (stats_cpu['observation.current']['std'] + 1e-8)
+                offline_data['action'] = (offline_data['action'] - stats_gpu['action']['mean']) / (stats_gpu['action']['std'] + 1e-8)
+                offline_data['observation.state'] = (offline_data['observation.state'] - stats_gpu['observation.state']['mean']) / (stats_gpu['observation.state']['std'] + 1e-8)
+                offline_data['observation.current'] = (offline_data['observation.current'] - stats_gpu['observation.current']['mean']) / (stats_gpu['observation.current']['std'] + 1e-8)
                 offline_data['observation.proprio_state'] = offline_data['observation.state']
                 offline_data['observation.state'] = torch.concat([offline_data['observation.state'], offline_data['observation.current']], dim=-1)
                 
@@ -470,16 +478,16 @@ def train_func(config_path: str) -> None:
 
                 # normalize online data
                 data = cast_dtype(data, torch.float32)
-                loss_dict = trainer.train_step(data=move_to_device(data, device), iterations=iterations)
+                loss_dict = trainer.train_step(data=move_to_device(data, device), iterations=iterations, epoch=epoch, total_epochs=config.train.epoch)
                 if rank == 0:
                     _record(loss_dict, iterations, num_iter_per_epoch)
-                    print(f"{iterations} iterations complete")
                     # Need to check inside save_checkpoints if the models are wrapped by DDP
+
                     if (iterations + 1) % config.train.save_every == 0:
                         _save_checkpoints(models=trainer.models, 
                                           optimizers=trainer.optimizers, 
                                           save_dir=config.train.save_dir, 
-                                          epoch=0)
+                                          epoch=epoch)
                         
                         # send the policy weight to the inference engine
                         policy_components_weights = {}
