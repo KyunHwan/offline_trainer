@@ -71,57 +71,64 @@ class VFP_Single_Expert_Trainer(nn.Module):
         # right_image_features = einops.rearrange(right_image_features, 'b c h w -> b 1 c h w')
         batch_size = data['observation.images.cam_head'].shape[0]
 
-        image_features, image_semantic = self.models['backbone'](torch.cat([data['observation.images.cam_head'],
-                                                                            data['observation.images.cam_left'],
-                                                                            data['observation.images.cam_right'],], dim=0))
-        head_image_features, head_image_semantic = image_features[:batch_size], image_semantic[:batch_size]
-        head_image_features = einops.rearrange(head_image_features, 'b c h w -> b 1 c h w')
-        left_image_features = image_features[batch_size:2 * batch_size]#, image_semantic[batch_size:2 * batch_size]
+
+        head_image_features, head_image_semantic = self.models['head_backbone'](data['observation.images.cam_head'])
+        left_image_features, left_image_semantic = self.models['left_backbone'](data['observation.images.cam_left'])
+        right_image_features, right_image_semantic = self.models['right_backbone'](data['observation.images.cam_right'])
+
+        head_image_features = einops.rearrange(head_image_features, 'b c h w -> b (h w) c')
+        head_image_semantic = einops.rearrange(head_image_semantic, 'b d -> b 1 d')
+        
         left_image_features = einops.rearrange(left_image_features, 'b c h w -> b (h w) c')
-        right_image_features = image_features[2 * batch_size:]#, image_semantic[2 * batch_size:]
+        left_image_semantic = einops.rearrange(left_image_semantic, 'b d -> b 1 d')
+        
         right_image_features = einops.rearrange(right_image_features, 'b c h w -> b (h w) c')
+        right_image_semantic = einops.rearrange(right_image_semantic, 'b d -> b 1 d')
 
         with torch.no_grad():
             """ Depth """
             # outputs (batch, num_features, height, width, feature_dim) shaped latent features
-            depth_head = einops.rearrange(self.models['da3'](image=data['observation.images.cam_head'], export_feat_layers=[18, 23]),
+            depth_head = einops.rearrange(self.models['da3'](image=data['observation.images.cam_head'], export_feat_layers=[18, 12]),
                                           'b n h w d -> b (n h w) d')
-            # outputs (batch, num_features, height, width, feature_dim) shaped latent features
-            depth_left = einops.rearrange(self.models['da3'](image=data['observation.images.cam_left'], export_feat_layers=[18, 23]),
-                                          'b n h w d -> b (n h w) d')
-            # outputs (batch, num_features, height, width, feature_dim) shaped latent features
-            depth_right = einops.rearrange(self.models['da3'](image=data['observation.images.cam_right'], export_feat_layers=[18, 23]),
-                                          'b n h w d -> b (n h w) d')
+            # # outputs (batch, num_features, height, width, feature_dim) shaped latent features
+            # depth_left = einops.rearrange(self.models['da3'](image=data['observation.images.cam_left'], export_feat_layers=[18, 23]),
+            #                               'b n h w d -> b (n h w) d')
+            # # outputs (batch, num_features, height, width, feature_dim) shaped latent features
+            # depth_right = einops.rearrange(self.models['da3'](image=data['observation.images.cam_right'], export_feat_layers=[18, 23]),
+            #                               'b n h w d -> b (n h w) d')
 
-        """ VQVAE Posterior """
-        posterior_cls_token = self.models['vae_posterior'](cond_proprio=data['observation.state'],
-                                                             cond_visual=head_image_features,
-                                                             cond_semantic=head_image_semantic,
-                                                             action = data['action']
-                                                             )
+        # """ VQVAE Posterior """
+        # posterior_cls_token = self.models['vae_posterior'](cond_proprio=data['observation.state'],
+        #                                                      cond_visual=head_image_features,
+        #                                                      cond_semantic=head_image_semantic,
+        #                                                      action = data['action']
+        #                                                      )
         
-        """ VQVAE Prior """
-        prior_cls_token = self.models['vae_prior'](cond_proprio=data['observation.state'],
-                                                     cond_visual=head_image_features,
-                                                     cond_semantic=head_image_semantic,
-                                                     action = None
-                                                     )
-        head_image_features = einops.rearrange(head_image_features, 'b n c h w -> b (n h w) c')
-        kl = torch.pow(prior_cls_token - posterior_cls_token, 2).mean()
+        # """ VQVAE Prior """
+        # prior_cls_token = self.models['vae_prior'](cond_proprio=data['observation.state'],
+        #                                              cond_visual=head_image_features,
+        #                                              cond_semantic=head_image_semantic,
+        #                                              action = None
+        #                                              )
+        # head_image_features = einops.rearrange(head_image_features, 'b n c h w -> b (n h w) c')
+        # kl = torch.pow(prior_cls_token - posterior_cls_token, 2).mean()
 
         """ Proprio Projection """
         conditioning_info = self.models['info_embedder'](
             cond_proprio=data['observation.state'],
-            cond_visual=torch.cat([
+            cond_visual=[
                 head_image_features,
                 depth_head,
                 left_image_features, # einops.rearrange(left_image_features, 'b n c h w -> b (n h w) c'),
-                depth_left,
+                #depth_left,
                 right_image_features, #einops.rearrange(right_image_features, 'b n c h w -> b (n h w) c')
-                depth_right
+                #depth_right
             ],
-            dim=1),
-            cond_semantic=posterior_cls_token,
+            cond_semantic=[
+                head_image_semantic,
+                left_image_semantic,
+                right_image_semantic
+            ],
             action=None
         )['encoder_output']
 
@@ -148,8 +155,8 @@ class VFP_Single_Expert_Trainer(nn.Module):
                                   state_pred = data['observation.state'], 
                                   state_target = data['observation.state'])
         
-        loss["total"] = velocity_loss + 0.2 * sinkhorn_loss + kl
-        loss["prior_posterior"] = kl.detach().clone().item()
+        loss["total"] = velocity_loss + 0.2 * sinkhorn_loss# + kl
+        #loss["prior_posterior"] = kl.detach().clone().item()
         loss["velocity"] = velocity_loss.detach().clone().item()
         loss["Sinkhorn"] = sinkhorn_loss.detach().clone().item()
         
@@ -168,7 +175,7 @@ class VFP_Single_Expert_Trainer(nn.Module):
         detached_loss = self._clip_get_grad_norm(loss=loss, clip_val=1.0)
         self._step()
         detached_loss = self._detached_loss(detached_loss)
-        
+        detached_loss = self._get_lr(detached_loss)
         return detached_loss
     
     def unwrap(self, m: nn.Module) -> nn.Module:
@@ -219,4 +226,10 @@ class VFP_Single_Expert_Trainer(nn.Module):
         for model_name in self.models.keys():
             if model_name in self.optimizers.keys():
                 loss[f"{model_name} grad_norm"] = torch.nn.utils.clip_grad_norm_(self.models[model_name].parameters(), max_norm=clip_val).detach().item()
+        return loss
+    
+    def _get_lr(self, loss):
+        for model_name in self.models.keys():
+            if model_name in self.optimizers.keys():
+                loss[f"{model_name} lr"] = self.optimizers[model_name].param_groups[0]['lr']
         return loss

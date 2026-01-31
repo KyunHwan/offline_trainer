@@ -6,14 +6,14 @@ params:
   use_cond_semantic: false
   cond_semantic_dim: null
 
-  transformer_d_model: 768
-  transformer_nhead: 16
-  transformer_dim_feedforward: 4096
+  transformer_d_model: 512
+  transformer_nhead: 8
+  transformer_dim_feedforward: 3200
   transformer_dropout: 0.0
   transformer_activation: gelu
   transformer_batch_first: true
   transformer_tgt_is_causal: true
-  transformer_num_layers: 10
+  transformer_num_layers: 7
 
   
 

@@ -190,7 +190,7 @@ def _build_models(world_size, global_rank, local_rank, enable_dist_train, config
         # For example, when mixture of experts is used.
         find_unused_parameters = getattr(config.model, "find_unused_parameters", False)
 
-        models[k] = DDP(policy, find_unused_parameters=find_unused_parameters) if enable_dist_train and not frozen else policy
+        models[k] = DDP(policy, find_unused_parameters=find_unused_parameters, device_ids=[local_rank], output_device=local_rank) if enable_dist_train and not frozen else policy
 
     if local_rank == 0: 
         print(f"Total Parameters: {model_total_params:.1f} M")
@@ -442,6 +442,7 @@ def train(config_path: str) -> None:
     set_global_seed(seed=base_seed + rank)
     _dist_barrier(enable_dist_train, local_rank)
     dataloader, sampler, stats = _build_dataloader(config=config, world_rank=rank, local_rank=local_rank, world_size=world_size, enable_dist_train=enable_dist_train)
+    _dist_barrier(enable_dist_train, local_rank)
     num_iter_per_epoch = float(len(dataloader))
     try:
         stats_cpu = tree_map(map_list_to_torch, stats)
@@ -453,6 +454,7 @@ def train(config_path: str) -> None:
                 sampler.set_epoch(epoch)
         
             for _, data in enumerate(tqdm(dataloader, disable=(rank != 0))):
+                #print(stats_cpu['action']['mean'].shape) # (24)
                 data['action'] = (data['action'] - stats_cpu['action']['mean']) / (stats_cpu['action']['std'] + 1e-8)
                 data['observation.state'] = (data['observation.state'] - stats_cpu['observation.state']['mean']) / (stats_cpu['observation.state']['std'] + 1e-8)
                 data['observation.current'] = (data['observation.current'] - stats_cpu['observation.current']['mean']) / (stats_cpu['observation.current']['std'] + 1e-8)
@@ -475,6 +477,9 @@ def train(config_path: str) -> None:
                                     optimizers=trainer.optimizers, 
                                     save_dir=config.train.save_dir, 
                                     epoch=epoch + 1)
+            gc.collect() 
+            torch.cuda.empty_cache()
+            _dist_barrier(enable_dist_train, local_rank)
 
             # gc.collect() 
             # torch.cuda.empty_cache()

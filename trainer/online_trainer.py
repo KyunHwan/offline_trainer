@@ -423,6 +423,7 @@ def train_func(config_path: str) -> None:
     set_global_seed(seed=base_seed + rank)
     _dist_barrier(enable_dist_train, local_rank)
     dataloader, stats = _build_dataloader(config=config, world_rank=rank, local_rank=local_rank, world_size=world_size, enable_dist_train=enable_dist_train)
+    _dist_barrier(enable_dist_train, local_rank)
     num_iter_per_epoch = float(len(dataloader))
     try:
         stats_cpu = tree_map(map_list_to_torch, stats)
@@ -497,10 +498,11 @@ def train_func(config_path: str) -> None:
                                                                      trainer.models[model_name].state_dict().items()}
                         weights_ref = ray.put(policy_components_weights) # Push heavy data to Plasma
                         policy_state_manager.update_weights.remote(weights_ref) # Push light reference
-            
+
             iterations += 1 # has to be updated for all workers
             gc.collect() 
             torch.cuda.empty_cache()
+            _dist_barrier(enable_dist_train, local_rank)
 
     finally:
         if rank == 0:

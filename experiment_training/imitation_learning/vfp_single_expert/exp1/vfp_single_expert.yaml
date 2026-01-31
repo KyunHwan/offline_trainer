@@ -6,26 +6,32 @@ plugins:
 model:
   find_unused_parameters: true
   component_config_paths:
-    backbone: "experiment_models/vfp_single_expert/exp1/backbone.yaml"
+    head_backbone: "experiment_models/vfp_single_expert/exp1/head_backbone.yaml"
+    left_backbone: "experiment_models/vfp_single_expert/exp1/left_backbone.yaml"
+    right_backbone: "experiment_models/vfp_single_expert/exp1/right_backbone.yaml"
     da3: "experiment_models/vfp_single_expert/exp1/da3.yaml"
-    vae_posterior: "experiment_models/vfp_single_expert/exp1/vae_posterior.yaml"
-    vae_prior: "experiment_models/vfp_single_expert/exp1/vae_prior.yaml"
     info_embedder: "experiment_models/vfp_single_expert/exp1/info_embedder.yaml"
     action_decoder: "experiment_models/vfp_single_expert/exp1/action_decoder.yaml"
     
   component_build_args:
-    backbone:
+    head_backbone:
+      init: false
+      freeze: false
+    left_backbone:
+      init: false
+      freeze: false
+    right_backbone:
       init: false
       freeze: false
     da3:
       init: false
       freeze: true
-    vae_posterior:
-      init: true
-      freeze: false
-    vae_prior:
-      init: true
-      freeze: false
+    # vae_posterior:
+    #   init: true
+    #   freeze: false
+    # vae_prior:
+    #   init: true
+    #   freeze: false
     info_embedder:
       init: true
       freeze: false
@@ -33,96 +39,97 @@ model:
       init: true
       freeze: false
   component_optims:
-    backbone:
+    head_backbone:
       type: "adamw_warmup_cosine_decay"
       params:
-        lr: 1.0e-4 # AdamW
-        betas: [0.9, 0.995]
+        peak_lr: 1.0e-5
+        betas: [0.9, 0.999]
         eps: 1.0e-10
-        weight_decay: 0.0001
-        max_lr: 1.0e-4 # OneCycleLR
-        total_steps: 328800
-        epochs: null
-        steps_per_epoch: null
-        pct_start: 0.02
-        warmup_strategy: 'linear'
-        div_factor: 3288
-        final_div_factor: 1000.0
-        alpha: null
-        exponent: 1.0
-        last_epoch: -1
-    vae_posterior:
+        weight_decay: 0.00001
+        total_steps: 200000
+        warmup_steps: 2000
+        start_lr: 1.0e-7
+        end_lr: 1.0e-8
+    left_backbone:
       type: "adamw_warmup_cosine_decay"
       params:
-        lr: 1.0e-4 # AdamW
-        betas: [0.9, 0.995]
+        peak_lr: 1.0e-5
+        betas: [0.9, 0.999]
         eps: 1.0e-10
-        weight_decay: 0.0001
-        max_lr: 1.0e-4 # OneCycleLR
-        total_steps: 328800
-        epochs: null
-        steps_per_epoch: null
-        pct_start: 0.02
-        warmup_strategy: 'linear'
-        div_factor: 3288
-        final_div_factor: 1000.0
-        alpha: null
-        exponent: 1.0
-        last_epoch: -1
-    vae_prior:
+        weight_decay: 0.00001
+        total_steps: 200000
+        warmup_steps: 2000
+        start_lr: 1.0e-7
+        end_lr: 1.0e-8
+    right_backbone:
       type: "adamw_warmup_cosine_decay"
       params:
-        lr: 1.0e-4 # AdamW
-        betas: [0.9, 0.995]
+        peak_lr: 1.0e-5
+        betas: [0.9, 0.999]
         eps: 1.0e-10
-        weight_decay: 0.0001
-        max_lr: 1.0e-4 # OneCycleLR
-        total_steps: 328800
-        epochs: null
-        steps_per_epoch: null
-        pct_start: 0.02
-        warmup_strategy: 'linear'
-        div_factor: 3288
-        final_div_factor: 1000.0
-        alpha: null
-        exponent: 1.0
-        last_epoch: -1
+        weight_decay: 0.00001
+        total_steps: 200000
+        warmup_steps: 2000
+        start_lr: 1.0e-7
+        end_lr: 1.0e-8
+    # vae_posterior:
+    #   type: "adamw_warmup_cosine_decay"
+    #   params:
+    #     lr: 1.0e-4 # AdamW
+    #     betas: [0.9, 0.999]
+    #     eps: 1.0e-10
+    #     weight_decay: 0.00001
+    #     max_lr: 1.0e-4 # OneCycleLR
+    #     total_steps: 328800
+    #     epochs: null
+    #     steps_per_epoch: null
+    #     pct_start: 0.005
+    #     warmup_strategy: 'linear'
+    #     div_factor: 3288
+    #     final_div_factor: 100.0
+    #     alpha: null
+    #     exponent: 1.0
+    #     last_epoch: -1
+    # vae_prior:
+    #   type: "adamw_warmup_cosine_decay"
+    #   params:
+    #     lr: 1.0e-4 # AdamW
+    #     betas: [0.9, 0.999]
+    #     eps: 1.0e-10
+    #     weight_decay: 0.00001
+    #     max_lr: 1.0e-4 # OneCycleLR
+    #     total_steps: 328800
+    #     epochs: null
+    #     steps_per_epoch: null
+    #     pct_start: 0.005
+    #     warmup_strategy: 'linear'
+    #     div_factor: 3288
+    #     final_div_factor: 100.0
+    #     alpha: null
+    #     exponent: 1.0
+    #     last_epoch: -1
     info_embedder:
       type: "adamw_warmup_cosine_decay"
       params:
-        lr: 1.0e-4 # AdamW
-        betas: [0.9, 0.995]
+        peak_lr: 1.0e-4
+        betas: [0.9, 0.999]
         eps: 1.0e-10
-        weight_decay: 0.0001
-        max_lr: 1.0e-4 # OneCycleLR
-        total_steps: 328800
-        epochs: null
-        steps_per_epoch: null
-        pct_start: 0.04
-        warmup_strategy: 'linear'
-        div_factor: 3288
-        final_div_factor: 1000.0
-        alpha: null
-        exponent: 1.0
-        last_epoch: -1
+        weight_decay: 0.00001
+        total_steps: 200000
+        warmup_steps: 2000
+        start_lr: 1.0e-6
+        end_lr: 1.0e-7
     action_decoder:
       type: "adamw_warmup_cosine_decay"
       params:
-        lr: 1.0e-4 # AdamW
-        betas: [0.9, 0.995]
+        peak_lr: 1.0e-4
+        betas: [0.9, 0.999]
         eps: 1.0e-10
-        weight_decay: 0.0001
-        max_lr: 1.0e-4 # OneCycleLR
-        total_steps: 328800
-        epochs: null
-        steps_per_epoch: null
-        pct_start: 0.02
-        warmup_strategy: 'linear'
-        div_factor: 3288
-        final_div_factor: 1000.0
-        alpha: null
-        exponent: 1.0
-        last_epoch: -1
+        weight_decay: 0.00001
+        total_steps: 200000
+        warmup_steps: 2000
+        start_lr: 1.0e-6
+        end_lr: 1.0e-7
 
 
 data:
@@ -137,7 +144,7 @@ data:
       obs_proprio_history: 40
       obs_images_history: 1
       HZ: 20
-  batch_size: 30
+  batch_size: 60
   num_workers: 12
   pin_memory: true
   persistent_workers: true
