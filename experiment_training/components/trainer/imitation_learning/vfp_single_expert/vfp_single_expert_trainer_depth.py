@@ -39,7 +39,7 @@ def switch_load_balancing_loss(
     P = router_probs.mean(0)
     return E * torch.sum(f * P)
 
-@TRAINER_REGISTRY.register("vfp_single_expert_trainer")
+@TRAINER_REGISTRY.register("vfp_single_expert_trainer_depth")
 class VFP_Single_Expert_Trainer(nn.Module):
     def __init__(self,
                  *,
@@ -85,17 +85,17 @@ class VFP_Single_Expert_Trainer(nn.Module):
         right_image_features = einops.rearrange(right_image_features, 'b c h w -> b (h w) c')
         right_image_semantic = einops.rearrange(right_image_semantic, 'b d -> b 1 d')
 
-        # with torch.no_grad():
-        #     """ Depth """
-        #     # outputs (batch, num_features, height, width, feature_dim) shaped latent features
-        #     depth_head = einops.rearrange(self.models['da3'](image=data['observation.images.cam_head'], export_feat_layers=[18, 12]),
-        #                                   'b n h w d -> b (n h w) d')
-        #     # outputs (batch, num_features, height, width, feature_dim) shaped latent features
-        #     depth_left = einops.rearrange(self.models['da3'](image=data['observation.images.cam_left'], export_feat_layers=[18, 23]),
-        #                                   'b n h w d -> b (n h w) d')
-        #     # outputs (batch, num_features, height, width, feature_dim) shaped latent features
-        #     depth_right = einops.rearrange(self.models['da3'](image=data['observation.images.cam_right'], export_feat_layers=[18, 23]),
-        #                                   'b n h w d -> b (n h w) d')
+        with torch.no_grad():
+            """ Depth """
+            # outputs (batch, num_features, height, width, feature_dim) shaped latent features
+            depth_head = einops.rearrange(self.models['da3'](image=data['observation.images.cam_head'], export_feat_layers=[18, 12]),
+                                          'b n h w d -> b (n h w) d')
+            # # outputs (batch, num_features, height, width, feature_dim) shaped latent features
+            # depth_left = einops.rearrange(self.models['da3'](image=data['observation.images.cam_left'], export_feat_layers=[18, 23]),
+            #                               'b n h w d -> b (n h w) d')
+            # # outputs (batch, num_features, height, width, feature_dim) shaped latent features
+            # depth_right = einops.rearrange(self.models['da3'](image=data['observation.images.cam_right'], export_feat_layers=[18, 23]),
+            #                               'b n h w d -> b (n h w) d')
 
         # """ VQVAE Posterior """
         # posterior_cls_token = self.models['vae_posterior'](cond_proprio=data['observation.state'],
@@ -118,7 +118,7 @@ class VFP_Single_Expert_Trainer(nn.Module):
             cond_proprio=data['observation.state'],
             cond_visual=[
                 head_image_features,
-                #depth_head,
+                depth_head,
                 left_image_features, # einops.rearrange(left_image_features, 'b n c h w -> b (n h w) c'),
                 #depth_left,
                 right_image_features, #einops.rearrange(right_image_features, 'b n c h w -> b (n h w) c')
@@ -148,12 +148,6 @@ class VFP_Single_Expert_Trainer(nn.Module):
         #                             memory_input=torch.cat([conditioning_info, conditioning_info], dim=0),
         #                             discrete_semantic_input=None,
         #                         ) # (2 * b s d)
-        # velocity_loss = (dx_t - concat_actions[:B]).pow(2).mean()
-
-        # sinkhorn_loss = self.loss(pred_action = noise + concat_actions[B:], 
-        #                           target_action = data['action'], 
-        #                           state_pred = data['observation.state'], 
-        #                           state_target = data['observation.state'])
         actions = self.models['action_decoder'](
             time=time,
             noise=x_t,

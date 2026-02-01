@@ -2,15 +2,17 @@ plugins:
   - "experiment_training.components.dataloader.lerobot_data"
   - "experiment_training.components.loss.sinkhorn_knopp"
   - "experiment_training.components.optimizer.adamw_cosine_decay"
-  - "experiment_training.components.trainer.imitation_learning.vfp_single_expert.vfp_single_expert_trainer"
+  - "experiment_training.components.trainer.imitation_learning.vfp_single_expert.vfp_single_expert_trainer_depth"
 model:
   find_unused_parameters: true
   component_config_paths:
-    head_backbone: "experiment_models/vfp_single_expert/exp1/head_backbone.yaml"
-    left_backbone: "experiment_models/vfp_single_expert/exp1/left_backbone.yaml"
-    right_backbone: "experiment_models/vfp_single_expert/exp1/right_backbone.yaml"
-    info_embedder: "experiment_models/vfp_single_expert/exp1/info_embedder.yaml"
-    action_decoder: "experiment_models/vfp_single_expert/exp1/action_decoder.yaml"
+    head_backbone: "experiment_models/vfp_single_expert/exp2/head_backbone.yaml"
+    left_backbone: "experiment_models/vfp_single_expert/exp2/left_backbone.yaml"
+    right_backbone: "experiment_models/vfp_single_expert/exp2/right_backbone.yaml"
+    info_embedder: "experiment_models/vfp_single_expert/exp2/info_embedder.yaml"
+    da3: "experiment_models/vfp_single_expert/exp2/da3.yaml"
+    #multimodal_bridge: "experiment_models/vfp_single_expert/exp2/multimodal_bridge.yaml"
+    action_decoder: "experiment_models/vfp_single_expert/exp2/action_decoder.yaml"
     
   component_build_args:
     head_backbone:
@@ -22,6 +24,9 @@ model:
     right_backbone:
       init: false
       freeze: false
+    da3:
+      init: false
+      freeze: true
     info_embedder:
       init: true
       freeze: false
@@ -32,59 +37,94 @@ model:
     head_backbone:
       type: "adamw_warmup_cosine_decay"
       params:
-        peak_lr: 1.0e-4
+        peak_lr: 2.0e-4
         betas: [0.9, 0.999]
         eps: 1.0e-10
         weight_decay: 0.00001
         total_steps: 200000
-        warmup_steps: 2000
+        warmup_steps: 1000
         start_lr: 1.0e-6
         end_lr: 1.0e-6
     left_backbone:
       type: "adamw_warmup_cosine_decay"
       params:
-        peak_lr: 1.0e-4
+        peak_lr: 2.0e-4
         betas: [0.9, 0.999]
         eps: 1.0e-10
         weight_decay: 0.00001
         total_steps: 200000
-        warmup_steps: 2000
+        warmup_steps: 1000
         start_lr: 1.0e-6
         end_lr: 1.0e-6
     right_backbone:
       type: "adamw_warmup_cosine_decay"
       params:
-        peak_lr: 1.0e-4
+        peak_lr: 2.0e-4
         betas: [0.9, 0.999]
         eps: 1.0e-10
         weight_decay: 0.00001
         total_steps: 200000
-        warmup_steps: 2000
+        warmup_steps: 1000
         start_lr: 1.0e-6
         end_lr: 1.0e-6
+    # vae_posterior:
+    #   type: "adamw_warmup_cosine_decay"
+    #   params:
+    #     lr: 1.0e-4 # AdamW
+    #     betas: [0.9, 0.999]
+    #     eps: 1.0e-10
+    #     weight_decay: 0.00001
+    #     max_lr: 1.0e-4 # OneCycleLR
+    #     total_steps: 328800
+    #     epochs: null
+    #     steps_per_epoch: null
+    #     pct_start: 0.005
+    #     warmup_strategy: 'linear'
+    #     div_factor: 3288
+    #     final_div_factor: 100.0
+    #     alpha: null
+    #     exponent: 1.0
+    #     last_epoch: -1
+    # vae_prior:
+    #   type: "adamw_warmup_cosine_decay"
+    #   params:
+    #     lr: 1.0e-4 # AdamW
+    #     betas: [0.9, 0.999]
+    #     eps: 1.0e-10
+    #     weight_decay: 0.00001
+    #     max_lr: 1.0e-4 # OneCycleLR
+    #     total_steps: 328800
+    #     epochs: null
+    #     steps_per_epoch: null
+    #     pct_start: 0.005
+    #     warmup_strategy: 'linear'
+    #     div_factor: 3288
+    #     final_div_factor: 100.0
+    #     alpha: null
+    #     exponent: 1.0
+    #     last_epoch: -1
     info_embedder:
       type: "adamw_warmup_cosine_decay"
       params:
-        peak_lr: 1.0e-4
+        peak_lr: 2.0e-4
         betas: [0.9, 0.999]
         eps: 1.0e-10
         weight_decay: 0.00001
         total_steps: 200000
-        warmup_steps: 2000
+        warmup_steps: 1000
         start_lr: 1.0e-6
         end_lr: 1.0e-6
     action_decoder:
       type: "adamw_warmup_cosine_decay"
       params:
-        peak_lr: 1.0e-4
+        peak_lr: 2.0e-4
         betas: [0.9, 0.999]
         eps: 1.0e-10
         weight_decay: 0.00001
         total_steps: 200000
-        warmup_steps: 2000
+        warmup_steps: 1000
         start_lr: 1.0e-6
         end_lr: 1.0e-6
-
 
 data:
   datamodule:
@@ -93,24 +133,24 @@ data:
       task_name: 'picknplace'
       local_files_only: false
       root: '.'
-      repo_id: 'joon001001/igris-b-pnp-v4.1'
+      repo_id: 'joon001001/igris-b-pnp-v4'
       action_horizon: 40
       obs_proprio_history: 40
       obs_images_history: 1
       HZ: 20
-  batch_size: 60
+  batch_size: 48
   num_workers: 12
   pin_memory: true
   persistent_workers: true
   prefetch_factor: 1
 train:
-  project_name: 'vfp_single_expert_adamw_cosine_1e-4_v3.3.2_unfreeze_backbone_1e-4'
+  project_name: 'vfp_single_expert_adamw_cosine_1e-4_v3.3.2_unfreeze_backbone_1e-4_depth'
   epoch: 1000
   load_dir: null
   save_every: 3
-  save_dir: "experiment_training/imitation_learning/vfp_single_expert/exp1"
+  save_dir: "experiment_training/imitation_learning/vfp_single_expert/exp2"
   trainer: 
-    type: 'vfp_single_expert_trainer'
+    type: 'vfp_single_expert_trainer_depth'
   loss:
     type: "sinkhorn_knopp"
     params:

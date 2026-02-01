@@ -11,7 +11,7 @@ params:
   use_action: false
   action_dim: null
   num_cond_semantic: 3
-  num_cond_visuals: 3
+  num_cond_visuals: 4
 
   transformer_d_model: 512
   transformer_nhead: 8
