@@ -16,6 +16,8 @@ import torch.distributed as distributed
 
 import math
 
+import random
+
 
 def router_z_loss(logits: torch.Tensor) -> torch.Tensor:
     # ST-MoE style: mean(logsumexp(logits)^2)
@@ -71,6 +73,10 @@ class VFP_Single_Expert_Trainer(nn.Module):
         # right_image_features = einops.rearrange(right_image_features, 'b c h w -> b 1 c h w')
         batch_size = data['observation.images.cam_head'].shape[0]
 
+        cam_names = ['observation.images.cam_head', 'observation.images.cam_left', 'observation.images.cam_right']
+        selected_cam = random.choice(cam_names)
+        if random.random() < 0.15:
+            data[selected_cam] = torch.zeros_like(data[selected_cam])
 
         head_image_features, head_image_semantic = self.models['head_backbone'](data['observation.images.cam_head'])
         left_image_features, left_image_semantic = self.models['left_backbone'](data['observation.images.cam_left'])
