@@ -444,7 +444,8 @@ def train_func(config_path: str) -> None:
             replay_buffer_size = ray.get(replay_buffer.size.remote())
             print("replay buffer size: ", replay_buffer_size)
         print("replay buffer has been filled!")
-
+        _dist_barrier(enable_dist_train, local_rank)
+        
         while True:
             # --- Source A: Offline Data ---
             try:
