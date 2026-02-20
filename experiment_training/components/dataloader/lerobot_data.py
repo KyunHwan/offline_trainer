@@ -32,9 +32,9 @@ class LerobotDatasetFactory:
         # Actions: from 0 (current) up to (horizon-1) steps in the future
         action_timestamps = [i * dt for i in range(action_horizon)]
         
-        # Observations: from -(history-1) steps in the past up to 0 (current)
-        obs_proprio_timestamps = [i * dt for i in range(1 - obs_proprio_history, 1)]
-        obs_images_timestamps = [i * dt for i in range(1 - obs_images_history, 1)]
+        # Observations: from 0 (current) to -(history-1) steps in the past
+        obs_proprio_timestamps = [i * dt for i in range(0, -obs_proprio_history, -1)]
+        obs_images_timestamps = [i * dt for i in range(0, -obs_images_history, -1)]
 
         # Construct the config dictionary
         # You may need to adjust keys like 'observation.state' depending on your specific dataset columns
