@@ -86,6 +86,17 @@ def _dist_barrier(dist_enabled, local_rank) -> None:
         dist.barrier(device_ids=[local_rank])
 
 
+def unwrap_model(model):
+    """Unwrap DDP or Ray DDP to get the underlying module."""
+    # Handle torch DDP
+    if isinstance(model, DDP):
+        return model.module
+    # Handle Ray Train's wrapped model (ray.train.torch.TorchDistributedDataParallel or similar)
+    if hasattr(model, 'module'):
+        return model.module
+    return model
+
+
 
 """ Training Pipeline Component Construction """
 
@@ -451,6 +462,7 @@ def train_func(config_path: str) -> None:
                 # normalize online data
                 data = cast_dtype(data, torch.float32)
                 loss_dict = trainer.train_step(data=move_to_device(data, device), iterations=iterations, epoch=epoch, total_epochs=config.train.epoch)
+                
                 if rank == 0:
                     _record(loss_dict, iterations, num_iter_per_epoch)
                     # Need to check inside save_checkpoints if the models are wrapped by DDP
@@ -467,8 +479,8 @@ def train_func(config_path: str) -> None:
                         # move the state dict to CPU to use ray.put, which works with CPU shared memory
                         for model_name in trainer.models.keys():
                             if not config.model.component_build_args[model_name]['freeze']:
-                                policy_components_weights[model_name] = {k: v.cpu() for k, v in 
-                                                                        trainer.models[model_name].state_dict().items()}
+                                raw_model = unwrap_model(trainer.models[model_name])
+                                policy_components_weights[model_name] = {k: v.cpu() for k, v in raw_model.state_dict().items()}
                         weights_ref = ray.put(policy_components_weights) # Push heavy data to Plasma
                         policy_state_manager.update_state.remote(weights_ref) # Push light reference
 
