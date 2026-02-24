@@ -3,32 +3,33 @@ from __future__ import annotations
 
 import os
 import gc
+import time
 from pathlib import Path
 
-from trainer.config.loader import load_config
-from trainer.config.schemas import ExperimentConfig, validate_config
-from trainer.config.schemas import OptimizerParams
-from trainer.modeling.factories import PolicyConstructorModelFactory
-from trainer.registry import (
+from trainer.trainer.config.loader import load_config
+from trainer.trainer.config.schemas import ExperimentConfig, validate_config
+from trainer.trainer.config.schemas import OptimizerParams
+from trainer.trainer.modeling.factories import PolicyConstructorModelFactory
+from trainer.trainer.registry import (
     TRAINER_REGISTRY,
     DATASET_BUILDER_REGISTRY,
     OPTIMIZER_BUILDER_REGISTRY,
     LOSS_BUILDER_REGISTRY,
 )
 
-from trainer.templates import (
+from trainer.trainer.templates import (
     DatasetFactory,
     LossFactory,
     OptimizerFactory,
     Trainer
 )
-from trainer.registry.plugins import load_plugins
-from trainer.utils.import_utils import instantiate
-from trainer.utils.seed import *
+from trainer.trainer.registry.plugins import load_plugins
+from trainer.trainer.utils.import_utils import instantiate
+from trainer.trainer.utils.seed import *
 import argparse
 
-from trainer.utils.device import move_to_device, cast_dtype
-from trainer.utils.tree import tree_map
+from trainer.trainer.utils.device import move_to_device, cast_dtype
+from trainer.trainer.utils.tree import tree_map
 
 import ray
 import ray.train
@@ -80,37 +81,20 @@ def map_list_to_torch(lst: list):
 
 """ Distributed Training Helpers """
 
-def sync(tag: str, local_rank):
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-    if local_rank == 0:
-        print(f"[sync ok] {tag}", flush=True)
-
-def _model_fingerprint(m: nn.Module):
-    import hashlib
-    import json
-    items = []
-    for n, p in m.named_parameters():
-        items.append((n, tuple(p.shape), str(p.dtype), p.requires_grad))
-    # include buffers too (even if broadcast_buffers=False, mismatched buffers can indicate mismatched build)
-    for n, b in m.named_buffers():
-        items.append((f"BUF:{n}", tuple(b.shape), str(b.dtype), False))
-    s = json.dumps(items, sort_keys=True).encode("utf-8")
-    return hashlib.sha1(s).hexdigest(), items
-
-def find_unregistered_tensors(m: nn.Module):
-    param_ids = {id(p) for p in m.parameters()}
-    buffer_ids = {id(b) for b in m.buffers()}
-    weird = []
-    for mod_name, mod in m.named_modules():
-        for k, v in vars(mod).items():
-            if torch.is_tensor(v) and id(v) not in param_ids and id(v) not in buffer_ids:
-                weird.append((mod_name, k, str(v.device), tuple(v.shape), str(v.dtype)))
-    return weird
-
 def _dist_barrier(dist_enabled, local_rank) -> None:
     if dist_enabled:
         dist.barrier(device_ids=[local_rank])
+
+
+def unwrap_model(model):
+    """Unwrap DDP or Ray DDP to get the underlying module."""
+    # Handle torch DDP
+    if isinstance(model, DDP):
+        return model.module
+    # Handle Ray Train's wrapped model (ray.train.torch.TorchDistributedDataParallel or similar)
+    if hasattr(model, 'module'):
+        return model.module
+    return model
 
 
 
@@ -147,7 +131,6 @@ def _build_models(world_size, global_rank, local_rank, enable_dist_train, config
     models = {"main": model} if not isinstance(model, dict) else model
     model_total_params = 0.0
     for k, policy in models.items():
-        frozen = False
         if local_rank == 0: 
             n_params_m = sum(p.numel() for p in policy.parameters()) / 1000000.0
             model_total_params += n_params_m
@@ -156,13 +139,16 @@ def _build_models(world_size, global_rank, local_rank, enable_dist_train, config
         # Load model checkpoints / initialization
         # Need to check that saved models weren't wrapped using DDP (ie. that they aren't wrapped using modules)
         if config.train.load_dir is not None:
-            policy.load_state_dict(torch.load(os.path.join(config.train.load_dir, f"{k}.pt"), map_location='cpu'))
+            path = os.path.join(config.train.load_dir, f"{k}.pt")
+            if os.path.isfile(path):
+                policy.load_state_dict(torch.load(path, map_location='cpu'))
+            else:
+                print(f"{path} doesn't exist as a file!")
         else:
             if config.model.component_build_args[k]['init']: 
                 policy.apply(init_weights)
         
         if config.model.component_build_args[k]['freeze']:
-            frozen = True
             for param in policy.parameters():
                 param.requires_grad_(False)
             policy.eval()
@@ -211,7 +197,11 @@ def _build_optimizers(config, models: nn.ModuleDict[str, nn.Module], device) -> 
                                         _params_dict(OptimizerParams.model_validate(config.model.component_optims[model_name]['params']).model_dump()))
         optimizers[model_name] = optimizer_factory.build(models[model_name].parameters())
         if config.train.load_dir is not None:
-            optimizers[model_name].load_state_dict(torch.load(os.path.join(config.train.load_dir, f"{model_name}_opt.pt"), map_location=device))
+            path = os.path.join(config.train.load_dir, f"{model_name}_opt.pt")
+            if os.path.isfile(path):
+                optimizers[model_name].load_state_dict(torch.load(path, map_location=device))
+            else:
+                print(f"{path} doesn't exist as a file!")
     
     return optimizers
 
@@ -258,35 +248,24 @@ def _build_dataloader(config, world_rank=0, local_rank=0, world_size=0, enable_d
                     # 3. Now safe to write the file
                     with open(stats_path, "wb") as f:
                         pickle.dump(stats, f)
-            # elif key == 'norm_stats':
-            #     stats = returned_product[key]
-            #     if local_rank == 0:
-            #         try:
-            #             stats_path = os.path.join(config.train.save_dir, f"dataset_stats.pkl")
-            #             with open(stats_path, "wb") as f:
-            #                 pickle.dump(stats, f)
-            #         except:
-            #             stats_path = Path(os.path.join(config.train.save_dir, f"dataset_stats.pkl")).expanduser()
-            #             with open(stats_path, "wb") as f:
-            #                 pickle.dump(stats, f)
+
     else: 
         dataset = returned_product
         stats = None
 
-    #repo_id = 'joon001001/igris-b-pnp-lerobot'
-    #dataset = LeRobotDataset(repo_id)
-
     # When using DistributedSampler, do NOT set shuffle=True on DataLoader.
     # Shuffling is handled by the sampler (see PyTorch DDP tutorial pattern)
-    dataloader = ray.train.torch.prepare_data_loader(DataLoader(dataset, 
-                            batch_size=config.data.batch_size,
-                            num_workers=config.data.num_workers,
-                            pin_memory=config.data.pin_memory,
-                            persistent_workers=config.data.persistent_workers,
-                            prefetch_factor=config.data.prefetch_factor,
-                            worker_init_fn=seed_worker,
-                            drop_last=True,
-                            shuffle=False))
+    dataloader = ray.train.torch.prepare_data_loader(
+                        DataLoader(dataset, 
+                                    batch_size=config.data.batch_size,
+                                    num_workers=config.data.num_workers,
+                                    pin_memory=config.data.pin_memory,
+                                    persistent_workers=config.data.persistent_workers,
+                                    prefetch_factor=config.data.prefetch_factor,
+                                    worker_init_fn=seed_worker,
+                                    drop_last=True,
+                                    shuffle=False)
+                            )
     return dataloader, stats
 
 def _build_trainer(world_size, global_rank, local_rank, enable_dist_train, config, device) -> Trainer:
@@ -314,9 +293,7 @@ def _build_trainer(world_size, global_rank, local_rank, enable_dist_train, confi
         raise TypeError("Constructed object does not match Trainer interface")
     return trainer
 
-
 """ Parameter Saving """
-
 def _save_checkpoints(models: nn.ModuleDict, 
                       optimizers: dict[str, torch.optim.Optimizer], 
                       save_dir: str, 
@@ -442,8 +419,13 @@ def train_func(config_path: str) -> None:
         replay_buffer_size = 0
         while replay_buffer_size < config.data.batch_size * 2 * world_size:
             replay_buffer_size = ray.get(replay_buffer.size.remote())
+            time.sleep(1.0)
+            
+        if rank == 0:
+            print("replay buffer has been filled!")
             print("replay buffer size: ", replay_buffer_size)
-        print("replay buffer has been filled!")
+        
+        _dist_barrier(enable_dist_train, local_rank)
 
         while True:
             # --- Source A: Offline Data ---
@@ -480,6 +462,7 @@ def train_func(config_path: str) -> None:
                 # normalize online data
                 data = cast_dtype(data, torch.float32)
                 loss_dict = trainer.train_step(data=move_to_device(data, device), iterations=iterations, epoch=epoch, total_epochs=config.train.epoch)
+                
                 if rank == 0:
                     _record(loss_dict, iterations, num_iter_per_epoch)
                     # Need to check inside save_checkpoints if the models are wrapped by DDP
@@ -492,12 +475,14 @@ def train_func(config_path: str) -> None:
                         
                         # send the policy weight to the inference engine
                         policy_components_weights = {}
+
                         # move the state dict to CPU to use ray.put, which works with CPU shared memory
                         for model_name in trainer.models.keys():
-                            policy_components_weights[model_name] = {k: v.cpu() for k, v in 
-                                                                     trainer.models[model_name].state_dict().items()}
+                            if not config.model.component_build_args[model_name]['freeze']:
+                                raw_model = unwrap_model(trainer.models[model_name])
+                                policy_components_weights[model_name] = {k: v.cpu() for k, v in raw_model.state_dict().items()}
                         weights_ref = ray.put(policy_components_weights) # Push heavy data to Plasma
-                        policy_state_manager.update_weights.remote(weights_ref) # Push light reference
+                        policy_state_manager.update_state.remote(weights_ref) # Push light reference
 
             iterations += 1 # has to be updated for all workers
             gc.collect() 

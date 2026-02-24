@@ -1,8 +1,8 @@
 plugins:
-  - "experiment_training.components.dataloader.lerobot_data"
-  - "experiment_training.components.loss.sinkhorn_knopp"
-  - "experiment_training.components.optimizer.adamw_cosine_decay"
-  - "experiment_training.components.trainer.imitation_learning.vfp_single_expert.vfp_single_expert_trainer_depth"
+  - "trainer.experiment_training.components.dataloader.lerobot_data"
+  - "trainer.experiment_training.components.loss.sinkhorn_knopp"
+  - "trainer.experiment_training.components.optimizer.adamw_cosine_decay"
+  - "trainer.experiment_training.components.trainer.imitation_learning.vfp_single_expert.vfp_single_expert_trainer_depth"
 model:
   find_unused_parameters: true
   component_config_paths:
@@ -133,12 +133,12 @@ data:
       task_name: 'picknplace'
       local_files_only: false
       root: '.'
-      repo_id: 'joon001001/igris-b-pnp-v4'
+      repo_id: '/home/user/.cache/huggingface/lerobot/joon001001/igris-b-pnp-v4'
       action_horizon: 40
       obs_proprio_history: 40
       obs_images_history: 1
       HZ: 20
-  batch_size: 48
+  batch_size: 2
   num_workers: 12
   pin_memory: true
   persistent_workers: true
@@ -148,7 +148,7 @@ train:
   epoch: 1000
   load_dir: null
   save_every: 3
-  save_dir: "experiment_training/imitation_learning/vfp_single_expert/exp2"
+  save_dir: "trainer/experiment_training/imitation_learning/vfp_single_expert/exp2"
   trainer: 
     type: 'vfp_single_expert_trainer_depth'
   loss:
