@@ -211,6 +211,7 @@ runs/
 *.pt
 *.pth
 *.pkl
+*.safetensors
 
 # wandb
 wandb/*

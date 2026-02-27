@@ -1,0 +1,37 @@
+schema_version: 1
+
+# input_dim = sum of all flattened processor outputs:
+#   depth:  output_depth_channel * Hd * Wd  = 24 * 16 * 16 = 6144  (DA3, 224x224 input)
+#   head:   output_img_channel * H' * W'    = 24 * 14 * 14 = 4704  (RadioV3, 224x224)
+#   left:                                   = 24 * 14 * 14 = 4704
+#   right:                                  = 24 * 14 * 14 = 4704
+#   proprio: obs_history * obs_dim          = 40 * 24       = 960
+#   action:  action_chunk_size * action_dim = 50 * 24       = 1200
+#   total:                                              = 22416
+# Adjust if your camera resolution differs from 224x224.
+
+params:
+  input_dim: 22416
+  num_ensemble: 3
+  num_layers: 3
+  num_hidden_dim: 2048
+  dropout: 0.0
+
+model:
+  graph:
+    inputs: [flat_features]
+    modules:
+      q_fn:
+        _type_: dsrl_q_function
+        input_dim: ${params.input_dim}
+        num_ensemble: ${params.num_ensemble}
+        num_layers: ${params.num_layers}
+        num_hidden_dim: ${params.num_hidden_dim}
+        dropout: ${params.dropout}
+    nodes:
+      - name: q_value
+        call: module:q_fn
+        kwargs:
+          flattened_tensor: $flat_features
+    outputs: [$q_value]
+    return: single

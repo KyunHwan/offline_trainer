@@ -1,0 +1,34 @@
+schema_version: 1
+
+# Processes {head, left, right image features, head_depth, proprio}
+# into a single flattened vector for the noise latent actor.
+# Unlike q_function_processor, this does NOT take action as input —
+# the noise actor only conditions on observation state.
+
+params:
+  depth_data_keys: ['head_depth']
+  img_data_keys: ['head', 'left', 'right']
+  input_img_channel: 1024
+  input_depth_channel: 1024
+  output_img_channel: 24
+  output_depth_channel: 24
+
+model:
+  graph:
+    inputs: [data]
+    modules:
+      noise_proc:
+        _type_: dsrl_noise_actor_processor
+        depth_data_keys: ${params.depth_data_keys}
+        img_data_keys: ${params.img_data_keys}
+        input_img_channel: ${params.input_img_channel}
+        input_depth_channel: ${params.input_depth_channel}
+        output_img_channel: ${params.output_img_channel}
+        output_depth_channel: ${params.output_depth_channel}
+    nodes:
+      - name: flat_features
+        call: module:noise_proc
+        kwargs:
+          data: $data
+    outputs: [$flat_features]
+    return: single

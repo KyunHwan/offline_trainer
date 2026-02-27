@@ -1,0 +1,35 @@
+schema_version: 1
+
+# Processes {head, left, right image features, head_depth, proprio, action}
+# into a single flattened vector for the Q-function.
+# input_img_channel must match the backbone's output channels (RadioV3 = 1024).
+# input_depth_channel must match the rearranged DA3 output (1024 for DA3-Large).
+# Adjust input_dim in q_function.yaml if image resolution differs from 224x224.
+
+params:
+  depth_data_keys: ['head_depth']
+  img_data_keys: ['head', 'left', 'right']
+  input_img_channel: 1024
+  input_depth_channel: 1024
+  output_img_channel: 24
+  output_depth_channel: 24
+
+model:
+  graph:
+    inputs: [data]
+    modules:
+      q_proc:
+        _type_: dsrl_q_function_processor
+        depth_data_keys: ${params.depth_data_keys}
+        img_data_keys: ${params.img_data_keys}
+        input_img_channel: ${params.input_img_channel}
+        input_depth_channel: ${params.input_depth_channel}
+        output_img_channel: ${params.output_img_channel}
+        output_depth_channel: ${params.output_depth_channel}
+    nodes:
+      - name: flat_features
+        call: module:q_proc
+        kwargs:
+          data: $data
+    outputs: [$flat_features]
+    return: single
