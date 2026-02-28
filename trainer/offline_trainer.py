@@ -2,36 +2,47 @@
 from __future__ import annotations
 
 import os
+import sys as _sys
+# Insert project root second so parent ends up at position 0
+_SUBMODULE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _SUBMODULE_ROOT not in _sys.path:
+    _sys.path.insert(0, _SUBMODULE_ROOT)
+# Insert parent of project root last so it lands at position 0 (highest priority)
+# Required for trainer.trainer.* imports: trainer → project root, trainer.trainer → inner package
+_SUBMODULE_PARENT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _SUBMODULE_PARENT not in _sys.path:
+    _sys.path.insert(0, _SUBMODULE_PARENT)
+
 import gc
 from pathlib import Path
 
 import torch
 torch.autograd.set_detect_anomaly(True)
 
-from trainer.config.loader import load_config
-from trainer.config.schemas import ExperimentConfig, validate_config
-from trainer.config.schemas import OptimizerParams
-from trainer.modeling.factories import PolicyConstructorModelFactory
-from trainer.registry import (
+from trainer.trainer.config.loader import load_config
+from trainer.trainer.config.schemas import ExperimentConfig, validate_config
+from trainer.trainer.config.schemas import OptimizerParams
+from trainer.trainer.modeling.factories import PolicyConstructorModelFactory
+from trainer.trainer.registry import (
     TRAINER_REGISTRY,
     DATASET_BUILDER_REGISTRY,
     OPTIMIZER_BUILDER_REGISTRY,
     LOSS_BUILDER_REGISTRY,
 )
 
-from trainer.templates import (
+from trainer.trainer.templates import (
     DatasetFactory,
     LossFactory,
     OptimizerFactory,
     Trainer
 )
-from trainer.registry.plugins import load_plugins
-from trainer.utils.import_utils import instantiate
-from trainer.utils.seed import *
+from trainer.trainer.registry.plugins import load_plugins
+from trainer.trainer.utils.import_utils import instantiate
+from trainer.trainer.utils.seed import *
 import argparse
 
-from trainer.utils.device import move_to_device, cast_dtype
-from trainer.utils.tree import tree_map
+from trainer.trainer.utils.device import move_to_device, cast_dtype
+from trainer.trainer.utils.tree import tree_map
 
 import torch
 import torch.nn as nn
@@ -47,6 +58,7 @@ from torch.utils.data import DataLoader, RandomSampler
 from tqdm import tqdm
 import wandb
 import pickle
+
 
 def _params_dict(params) -> dict:
     if hasattr(params, "model_dump"):
@@ -421,16 +433,27 @@ def train(config_path: str) -> None:
                 sampler.set_epoch(epoch)
         
             for _, data in enumerate(tqdm(dataloader, disable=(rank != 0))):
-                #print(stats_cpu['action']['mean'].shape) # (24)
-                data['action'] = (data['action'] - stats_cpu['action']['mean']) / (stats_cpu['action']['std'] + 1e-8)
-                data['observation.state'] = (data['observation.state'] - stats_cpu['observation.state']['mean']) / (stats_cpu['observation.state']['std'] + 1e-8)
-                data['observation.current'] = (data['observation.current'] - stats_cpu['observation.current']['mean']) / (stats_cpu['observation.current']['std'] + 1e-8)
-                data['observation.proprio_state'] = data['observation.state']
-                data['observation.state'] = torch.concat([data['observation.state'], data['observation.current']], dim=-1)
+                """
+                data
+                    - action
+                    - observation.state
+                    - observation.current
+                    - labels.reward
+                    - task_index
+
+                task_index --> tasks.parquet --> get prompt
+                
+                stats_cpu
+                    - eg. (action, mean), (action, std)
+                """
+                stats_gpu = cast_dtype(stats_cpu, torch.float32)
+                stats_gpu = move_to_device(stats_gpu, device)
+                
                 data = cast_dtype(data, torch.float32)
                 data = move_to_device(data, device)
+
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    loss_dict = trainer.train_step(data=data, epoch=epoch, total_epochs=config.train.epoch, iterations=iterations)
+                    loss_dict = trainer.train_step(data=data, stats=stats_gpu)
                 if rank == 0:
                     _record(loss_dict, iterations, num_iter_per_epoch)
                 iterations += 1 # has to be updated for all GPUs

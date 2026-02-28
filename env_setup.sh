@@ -21,13 +21,13 @@ uv pip install chex
 uv pip install tqdm-loggable
 uv pip install numpydantic
 
-# lerobot
+# trainer
 echo "Installing lerobot and related libraries for dataset"
 uv pip install --no-deps lerobot
 uv pip install datasets
 uv pip install accelerate
-apt-get update && apt-get install -y ffmpeg libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev
-uv pip install torchcodec
+sudo apt-get update && sudo apt-get install -y ffmpeg libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev
+uv pip install torchcodec==0.9.1 # matching torch
 uv pip install av
 uv pip install tyro
 uv pip install ml_collections

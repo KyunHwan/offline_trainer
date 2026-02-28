@@ -30,7 +30,7 @@ class LerobotDatasetFactory:
         dt = 1.0 / HZ
 
         # Actions: from 0 (current) up to (horizon-1) steps in the future
-        action_timestamps = [i * dt for i in range(action_horizon)]
+        action_timestamps = [i * dt for i in range(1, action_horizon+1)]
         
         # Observations: from 0 (current) to -(history-1) steps in the past
         obs_proprio_timestamps = [i * dt for i in range(0, -obs_proprio_history, -1)]
@@ -40,6 +40,7 @@ class LerobotDatasetFactory:
         # You may need to adjust keys like 'observation.state' depending on your specific dataset columns
         delta_timestamps = {
             "action": action_timestamps,
+            "labels.reward": action_timestamps,
             "observation.current": obs_proprio_timestamps,
             "observation.state": obs_proprio_timestamps,
             "observation.images.cam_right": obs_images_timestamps,
@@ -61,8 +62,11 @@ class LerobotDatasetFactory:
             from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata # newer version
         except ImportError:
             from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata # older version
-
-        meta = LeRobotDatasetMetadata(repo_id)
+        try:
+            meta = LeRobotDatasetMetadata(repo_id)
+        except:
+            meta = LeRobotDatasetMetadata(repo_id, revision="main")
+            
         total_episodes = meta.total_episodes
 
         if local_files_only:

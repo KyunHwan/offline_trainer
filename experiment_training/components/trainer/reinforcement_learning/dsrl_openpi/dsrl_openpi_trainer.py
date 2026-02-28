@@ -46,9 +46,6 @@ class DSRLOpenPITrainer(nn.Module):
     Loss weights are class-level constants; subclass or set after construction to override.
     """
 
-    LAMBDA_Q: float = 0.5
-    LAMBDA_ACTOR: float = 0.1
-
     def __init__(
         self,
         *,
@@ -64,181 +61,33 @@ class DSRLOpenPITrainer(nn.Module):
         self.device = device
 
     # ------------------------------------------------------------------
-    # Module accessors (unwrap DDP to reach GraphModel.graph_modules)
-    # ------------------------------------------------------------------
-
-    def _unwrap(self, key: str) -> nn.Module:
-        m = self.models[key]
-        return m.module if isinstance(m, DDP) else m
-
-    def _openpi(self):
-        return self._unwrap("openpi_model").graph_modules["openpi_model"]
-
-    def _backbone(self):
-        # Shared RadioV3 — called once per camera in forward()
-        return self._unwrap("backbone").graph_modules["radiov3"]
-
-    def _q_proc(self):
-        return self._unwrap("q_function_processor").graph_modules["q_proc"]
-
-    def _q_fn(self):
-        return self._unwrap("q_function").graph_modules["q_fn"]
-
-    def _noise_proc(self):
-        return self._unwrap("noise_processor").graph_modules["noise_proc"]
-
-    def _noise_actor(self):
-        return self._unwrap("noise_actor").graph_modules["actor"]
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    @torch.no_grad()
-    def _extract_depth(self, image: torch.Tensor) -> torch.Tensor:
-        """Run DA3 on head camera and rearrange to (B, D, Hp, Wp).
-
-        DA3 returns (B, N_layers, Hp, Wp, feature_dim).
-        We export one layer and transpose to channel-first format.
-        """
-        da3 = self._unwrap("da3").graph_modules["da3"]
-        raw = da3(image=image, export_feat_layers=[18])  # (B, 1, Hp, Wp, 1024)
-        return einops.rearrange(raw[:, 0], "b h w d -> b d h w")  # (B, 1024, Hp, Wp)
-
-    def _build_openpi_obs(self, data: dict) -> dict[str, Any]:
-        """Build the raw observation dict expected by OpenPiBatchedWrapper."""
-        return {
-            "proprio": data["observation.state"],
-            "head":    data["observation.images.cam_head"],
-            "left":    data["observation.images.cam_left"],
-            "right":   data["observation.images.cam_right"],
-        }
-
-    def _build_processor_data(
-        self,
-        data: dict,
-        head_feats: torch.Tensor,
-        left_feats: torch.Tensor,
-        right_feats: torch.Tensor,
-        depth_feats: torch.Tensor,
-        action: torch.Tensor | None = None,
-    ) -> dict[str, torch.Tensor]:
-        """Assemble the dict consumed by both processor modules.
-
-        The processors expect ``proprio`` as (B, obs_history, obs_dim).
-        LeRobot datasets with obs_proprio_history > 1 already deliver this shape;
-        when history=1 the tensor arrives as (B, obs_dim) and is unsqueezed.
-        """
-        proprio = data["observation.state"]
-        if proprio.ndim == 2:
-            proprio = proprio.unsqueeze(1)  # (B, 1, obs_dim)
-
-        d = {
-            "head":       head_feats,
-            "left":       left_feats,
-            "right":      right_feats,
-            "head_depth": depth_feats,
-            "proprio":    proprio,
-        }
-        if action is not None:
-            d["action"] = action
-        return d
-
-    # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
 
     def forward(
         self,
         data: dict[str, Any],
-        epoch: int,
-        total_epochs: int,
-        iterations: int,
+        stats: dict[str, Any]
     ) -> dict[str, Any]:
-        loss_dict: dict[str, Any] = {}
+        """
+        Return 
+            - Action Q Loss
+            - Noise Q Loss
+            - Noise Q Value
+        """
+        # ------------------------------------------------------------------
+        # actor critic
+        # ------------------------------------------------------------------
 
-        # 1. ── Perception: frozen backbone, one call per camera ─────────────
-        # Backbone and DA3 are frozen; wrap in no_grad for memory efficiency.
-        with torch.no_grad():
-            backbone = self._backbone()
-            head_feats, _  = backbone(data["observation.images.cam_head"])
-            left_feats, _  = backbone(data["observation.images.cam_left"])
-            right_feats, _ = backbone(data["observation.images.cam_right"])
-            # each: (B, 1024, H', W')
+        # ------------------------------------------------------------------
+        # noise latent actor critic
+        # ------------------------------------------------------------------
 
-            # 2. Depth features from DA3 (frozen)
-            depth_feats = self._extract_depth(data["observation.images.cam_head"])
-            # (B, 1024, Hd, Wd)
+        # ------------------------------------------------------------------
+        # action critic step
+        # ------------------------------------------------------------------
 
-        # Detach so downstream trainable modules start a fresh computation graph.
-        head_feats  = head_feats.detach()
-        left_feats  = left_feats.detach()
-        right_feats = right_feats.detach()
-        depth_feats = depth_feats.detach()
-
-        # 3. ── Q-function: evaluate ground-truth dataset actions ──────────
-        q_proc_data = self._build_processor_data(
-            data, head_feats, left_feats, right_feats, depth_feats,
-            action=data["action"],  # (B, T_a, a_dim)
-        )
-        q_flat  = self._q_proc()(q_proc_data)   # (B, flat_q_dim)
-        q_value = self._q_fn()(q_flat)           # (B, 1)
-
-        # Q-function loss.
-        # Replace the placeholder target with your RL objective:
-        # e.g., CQL conservative penalty, IQL expectile, or reward-based TD.
-        q_target = torch.zeros_like(q_value)     # ← substitute with RL target
-        L_q = F.mse_loss(q_value, q_target)
-
-        loss_dict["q_loss"]  = L_q
-        loss_dict["q_value"] = q_value.mean().detach().item()
-
-        # 4. ── Noise actor: generate action candidates from observation ────
-        noise_proc_data = self._build_processor_data(
-            data, head_feats, left_feats, right_feats, depth_feats,
-            # no action — noise actor conditions only on state
-        )
-        noise_flat = self._noise_proc()(noise_proc_data)  # (B, flat_n_dim)
-        noise_eps  = self._noise_actor()(noise_flat)       # (B, T_a, a_dim)
-        # noise_eps is tanh-squashed to [-1, 1]; shape matches action dimensions.
-
-        # 5. ── Actor loss: evaluate Q(s, ε) directly ──────────────────────
-        # OpenPiBatchedWrapper.forward() internally detaches tensors via a
-        # numpy round-trip, breaking gradient flow back to the noise actor.
-        # Instead, we evaluate Q directly on noise_eps as the action candidate.
-        # Gradient path: L_actor → Q(s, ε) → q_proc(ε) → ε → noise_actor ✓
-        #
-        # Optionally, record the OpenPI-guided action for monitoring only:
-        obs_raw = self._build_openpi_obs(data)
-        with torch.no_grad():
-            guided_action = self._openpi().forward(obs_raw, noise=noise_eps)
-            # (B, T_a, a_dim) — for logging/monitoring only
-
-        q_actor_proc_data = self._build_processor_data(
-            data, head_feats, left_feats, right_feats, depth_feats,
-            action=noise_eps,  # use noise_eps directly — differentiable path
-        )
-        q_actor_flat  = self._q_proc()(q_actor_proc_data)  # (B, flat_q_dim)
-        q_actor_value = self._q_fn()(q_actor_flat)          # (B, 1)
-
-        L_actor = -q_actor_value.mean()  # minimise -Q  ⟺  maximise Q
-        loss_dict["actor_loss"]  = L_actor
-        loss_dict["q_actor_val"] = q_actor_value.mean().detach().item()
-
-        # 6. ── Monitoring: log guided-action Q value (no gradient) ───────
-        with torch.no_grad():
-            q_guided_proc = self._build_processor_data(
-                data, head_feats, left_feats, right_feats, depth_feats,
-                action=guided_action,
-            )
-            q_guided_val = self._q_fn()(self._q_proc()(q_guided_proc))
-        loss_dict["q_guided_val"] = q_guided_val.mean().detach().item()
-
-        # 7. ── Combined loss ───────────────────────────────────────────────
-        loss_dict["total"] = (
-            self.LAMBDA_Q     * L_q
-            + self.LAMBDA_ACTOR * L_actor
-        )
+        
         return loss_dict
 
     # ------------------------------------------------------------------
@@ -248,13 +97,11 @@ class DSRLOpenPITrainer(nn.Module):
     def train_step(
         self,
         data: dict[str, Any],
-        epoch: int,
-        total_epochs: int,
-        iterations: int,
+        stats: dict[str, Any]
     ) -> dict[str, Any]:
         self._ready_train()
         self._zero_grad()
-        loss = self.forward(data, epoch, total_epochs, iterations)
+        loss = self.forward(data, stats)
         self._backward(loss)
         detached = self._clip_get_grad_norm(loss, clip_val=1.0)
         self._step()
